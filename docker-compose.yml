@@ -1,0 +1,78 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-autogenius}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-autogenius_dev_password}
+      POSTGRES_DB: ${POSTGRES_DB:-autogenius}
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER:-autogenius} -d $${POSTGRES_DB:-autogenius}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  api:
+    build:
+      context: .
+      dockerfile: apps/api/Dockerfile
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    environment:
+      NODE_ENV: production
+      API_PORT: 3001
+      DATABASE_URL: postgresql://${POSTGRES_USER:-autogenius}:${POSTGRES_PASSWORD:-autogenius_dev_password}@postgres:5432/${POSTGRES_DB:-autogenius}
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
+      JWT_ACCESS_SECRET: ${JWT_ACCESS_SECRET:?Set JWT_ACCESS_SECRET in .env}
+      JWT_REFRESH_SECRET: ${JWT_REFRESH_SECRET:?Set JWT_REFRESH_SECRET in .env}
+      AI_SERVICE_URL: http://ai-service:8000
+    ports:
+      - "3001:3001"
+
+  ai-service:
+    build: ./apps/ai-service
+    restart: unless-stopped
+    environment:
+      AI_SERVICE_PORT: 8000
+      QWEN_API_KEY: ${QWEN_API_KEY:-}
+      QWEN_BASE_URL: ${QWEN_BASE_URL:-}
+    ports:
+      - "8000:8000"
+
+  admin:
+    build:
+      context: .
+      dockerfile: apps/admin/Dockerfile
+    restart: unless-stopped
+    depends_on:
+      - api
+    environment:
+      NODE_ENV: production
+    ports:
+      - "3002:3002"
+
+volumes:
+  postgres_data:
+  redis_data:

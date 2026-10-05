@@ -1,0 +1,32 @@
+{
+  "name": "@autogenius/admin",
+  "version": "0.1.0",
+  "private": true,
+  "description": "AutoGenius Admin (Next.js)",
+  "scripts": {
+    "build": "next build",
+    "start": "next start",
+    "dev": "next dev",
+    "lint": "eslint",
+    "typecheck": "tsc --noEmit",
+    "test": "jest"
+  },
+  "dependencies": {
+    "@autogenius/constants": "*",
+    "next": "^15.3.1",
+    "react": "^19.1.0",
+    "react-dom": "^19.1.0"
+  },
+  "devDependencies": {
+    "@eslint/eslintrc": "^3.3.1",
+    "@types/jest": "^29.5.14",
+    "@types/node": "^22.15.0",
+    "@types/react": "^19.1.0",
+    "@types/react-dom": "^19.1.0",
+    "eslint": "^9.25.0",
+    "eslint-config-next": "^15.3.1",
+    "jest": "^29.7.0",
+    "ts-jest": "^29.3.2",
+    "typescript": "^5.8.3"
+  }
+}
