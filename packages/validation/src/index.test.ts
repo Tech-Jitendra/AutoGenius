@@ -34,6 +34,24 @@ describe('parseEnv', () => {
   it('rejects an invalid DATABASE_URL', () => {
     expect(() => parseEnv({ ...validEnv, DATABASE_URL: 'not-a-url' })).toThrow();
   });
+
+  it('treats empty optional Qwen settings as unset', () => {
+    const env = parseEnv({ ...validEnv, QWEN_API_KEY: '', QWEN_BASE_URL: '' });
+    expect(env.QWEN_API_KEY).toBeUndefined();
+    expect(env.QWEN_BASE_URL).toBeUndefined();
+  });
+
+  it('keeps a valid Qwen base URL', () => {
+    const env = parseEnv({
+      ...validEnv,
+      QWEN_BASE_URL: 'https://dashscope.example.com/v1',
+    });
+    expect(env.QWEN_BASE_URL).toBe('https://dashscope.example.com/v1');
+  });
+
+  it('rejects a malformed non-empty Qwen base URL', () => {
+    expect(() => parseEnv({ ...validEnv, QWEN_BASE_URL: 'nope' })).toThrow();
+  });
 });
 
 describe('registerSchema', () => {

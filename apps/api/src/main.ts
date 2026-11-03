@@ -1,7 +1,10 @@
 import 'reflect-metadata';
 import { NestFactory } from '@nestjs/core';
 import { parseEnv } from '@autogenius/validation';
+import { loadLocalEnv } from './config/load-env';
 import { AppModule } from './app.module';
+
+loadLocalEnv();
 
 async function bootstrap(): Promise<void> {
   const env = parseEnv(process.env);

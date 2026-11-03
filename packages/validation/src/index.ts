@@ -1,5 +1,8 @@
 import { z } from 'zod';
 
+const emptyToUndefined = (value: unknown): unknown =>
+  value === '' ? undefined : value;
+
 export const envSchema = z.object({
   NODE_ENV: z.enum(['development', 'test', 'production']).default('development'),
   API_PORT: z.coerce.number().int().positive().default(3001),
@@ -16,8 +19,10 @@ export const envSchema = z.object({
   RATE_LIMIT_AUTH_MAX: z.coerce.number().int().positive().default(5),
   RATE_LIMIT_REFRESH_MAX: z.coerce.number().int().positive().default(10),
   AI_SERVICE_URL: z.string().url().default('http://localhost:8000'),
-  QWEN_API_KEY: z.string().optional(),
-  QWEN_BASE_URL: z.string().url().optional(),
+  // Optional until the AI tasks: an unset key must not block the rest of the
+  // stack, but a present value is still validated.
+  QWEN_API_KEY: z.preprocess(emptyToUndefined, z.string().optional()),
+  QWEN_BASE_URL: z.preprocess(emptyToUndefined, z.string().url().optional()),
 });
 
 export type Env = z.infer<typeof envSchema>;

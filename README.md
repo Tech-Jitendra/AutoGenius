@@ -4,8 +4,10 @@
 > "Your AI second opinion before you spend money on your car."
 
 AI-powered vehicle ownership assistant for Indian vehicle owners.
-This repository currently contains the **V1 foundation** (Task 01): monorepo,
-skeleton apps, tooling, Docker, and docs. Business features start in Task 02.
+This repository currently contains the **V1 foundation** (Task 01) and
+**authentication** (Task 02: register/login/refresh/logout/me on the API, plus
+the mobile login, register and signed-in screens). Vehicle, expense,
+maintenance, AI assistant and quotation features come in Tasks 03-07.
 
 ## Repository structure
 
@@ -21,7 +23,6 @@ autogenius/
 │   ├── validation/    Shared zod schemas (env, DTOs)
 │   └── constants/     Shared enums/categories
 ├── infrastructure/
-│   ├── docker/
 │   └── nginx/
 ├── docs/              architecture, database, api, ai, development-plan
 ├── docker-compose.yml
@@ -32,7 +33,11 @@ autogenius/
 
 - Node.js >= 20 (Node 22+ recommended) and npm
 - Python 3.12+ (for the AI service)
-- Docker + Docker Compose (for PostgreSQL/Redis and containerized runs)
+- PostgreSQL 16+ — either Docker Compose or a native install
+- Docker + Docker Compose — **optional** for day-to-day work; only needed for
+  the containerized setup described further down
+- Redis — provisioned by Docker Compose but **not yet used by any application
+  code**, so it is optional at this stage
 
 ## Installation
 
@@ -55,13 +60,100 @@ pip install -r requirements.txt
 
 ```bash
 cp .env.example .env
-# Then edit .env — at minimum set JWT_ACCESS_SECRET and JWT_REFRESH_SECRET:
+# Then edit .env — replace the placeholder JWT secrets with real ones:
 #   openssl rand -hex 32
 ```
 
 Never commit `.env`. Secrets are validated at startup by `@autogenius/validation`.
 
+**How the API finds `.env`.** `apps/api` loads the repository-root `.env` itself
+(`apps/api/src/config/load-env.ts`, using Node's built-in
+`process.loadEnvFile`) before validating it. It works from any working
+directory, needs no extra dependency, and **never overwrites a variable that is
+already set** — so values injected by Docker Compose or CI always win. Point at
+a different file with `API_ENV_FILE=/path/to/.env`. Expo and Next.js load their
+own env files as usual.
+
+| Variable | Required? | Notes |
+| --- | --- | --- |
+| `DATABASE_URL` | Yes | `postgresql://user:password@host:5432/autogenius` |
+| `JWT_ACCESS_SECRET` | Yes | min 32 chars, no insecure default |
+| `JWT_REFRESH_SECRET` | Yes (validated) | min 32 chars. Currently unused by the code — refresh tokens are opaque random values stored as SHA-256 hashes, not JWTs |
+| `JWT_ACCESS_EXPIRES_IN` / `JWT_REFRESH_EXPIRES_IN` | No | default `15m` / `30d` |
+| `RATE_LIMIT_TTL_MS` / `RATE_LIMIT_AUTH_MAX` / `RATE_LIMIT_REFRESH_MAX` | No | default `60000` / `5` / `10` |
+| `REDIS_HOST` / `REDIS_PORT` | No | defaults exist; nothing connects to Redis yet |
+| `QWEN_API_KEY` / `QWEN_BASE_URL` | No | may be left **empty** until Task 06; a non-empty `QWEN_BASE_URL` must still be a valid URL |
+| `EXPO_PUBLIC_API_URL` | No | the app falls back to `http://localhost:3001`, or `http://10.0.2.2:3001` on the Android emulator. Use your LAN IP for a physical device |
+
+## Local development without Docker
+
+Run each app as its workspace. From the repository root:
+
+```bash
+npm install                      # once, installs every workspace
+npm run api:dev                  # API with watch mode  (= npm run start:dev -w @autogenius/api)
+npm run mobile:start             # Expo dev server for the mobile app
+npm run admin:dev                # Next.js admin console
+cd apps/ai-service
+.venv\Scripts\activate           # Windows; then:
+uvicorn app.main:app --reload --port 8000
+```
+
+Verify the API answers: `curl http://localhost:3001/api/v1/health`.
+
+### Mobile app
+
+Start Expo **from the mobile workspace, never from the repository root**:
+
+```bash
+npm run mobile:start                    # from the repo root (runs in apps/mobile)
+# or explicitly:
+cd apps/mobile && npx expo start
+# or with the Android emulator attached:
+npm run mobile:android
+```
+
+The mobile project is already wired correctly — `"main": "expo-router/entry"`
+in `apps/mobile/package.json`, the `expo-router` plugin in
+`apps/mobile/app.json`, routes in `apps/mobile/src/app/`, and a monorepo-aware
+`apps/mobile/metro.config.js`. Running `expo start` from the repo root instead
+makes Expo fall back to the legacy `expo/AppEntry.js` entry, which imports a
+non-existent root `App` component and fails with
+`Unable to resolve "../../App"`. There is intentionally no `App.tsx`.
+
+The project targets **SDK 57**, so it needs Expo Go for SDK 57 or a development
+build (`npx expo run:android`, or an EAS development build); a newer Expo Go
+will refuse to open it. Because `expo-secure-store` has native code, Expo Go
+support is limited to what it bundles — use a development build to test login
+and token storage on a real device.
+
+### Connecting to an existing Windows PostgreSQL installation
+
+If PostgreSQL is already installed as a Windows service (check with
+`Get-Service *postgre*`) it owns port 5432, so Docker Compose's `postgres`
+container cannot bind it. Either stop the service, or create the role and
+database in the existing cluster and use it directly. With a native
+PostgreSQL 17 install:
+
+```bat
+"C:\Program Files\PostgreSQL\17\bin\psql.exe" -U postgres -h 127.0.0.1
+```
+
+```sql
+CREATE ROLE autogenius LOGIN PASSWORD 'autogenius_dev_password';
+CREATE DATABASE autogenius OWNER autogenius;
+```
+
+Then set `DATABASE_URL=postgresql://autogenius:autogenius_dev_password@localhost:5432/autogenius`
+in `.env`. A stock install uses `scram-sha-256` for local and `127.0.0.1`
+connections, so a real password is mandatory — there is no trust fallback.
+
+Confirm the app can reach it **before** running migrations: `npm run api:dev`
+should log a TypeORM connection and apply the auth migration without errors.
+
 ## Docker startup (PostgreSQL, Redis, API, AI service, Admin)
+
+Requires Docker Desktop to be running.
 
 ```bash
 docker compose up --build
@@ -74,28 +166,33 @@ docker compose up --build
 | AI service | http://localhost:8000/health |
 | Admin      | http://localhost:3002  |
 
-The mobile app runs locally (see below), not in Docker.
+The mobile app runs locally (see above), not in Docker.
 
-### Running only databases in Docker (recommended for local dev)
+### Running only databases in Docker
 
 ```bash
 docker compose up postgres redis
 ```
 
-Then run the apps locally:
-
-```bash
-npm run start:dev -w @autogenius/api      # API with watch mode
-npm run dev -w @autogenius/admin          # Admin with hot reload
-cd apps/ai-service && uvicorn app.main:app --reload --port 8000
-cd apps/mobile && npx expo start          # Mobile (Expo)
-```
+Then run the apps locally with the commands in
+[Local development without Docker](#local-development-without-docker). Note
+that a native PostgreSQL service and Docker's `postgres` container both want
+port 5432 — only one of them can have it.
 
 ## Database migrations
 
-Migrations are introduced with the Auth task (Task 02) alongside the
-PostgreSQL data layer. Until then, Docker Compose provisions an empty
-`autogenius` database.
+`apps/api/src/database/migrations/1791158400000-CreateAuthTables.ts` creates the
+`users` and `refresh_tokens` tables, including the `email` and `lower(email)`
+unique constraints. The API applies pending migrations automatically on boot
+(`migrationsRun: true`, `synchronize: false`). To run them by hand:
+
+```bash
+npm run migration:run -w @autogenius/api
+```
+
+`migration:run` uses `apps/api/src/database/data-source.ts`, which loads the
+same root `.env`. Verify the connection first — running a migration against an
+unknown database is not reversible.
 
 ## Running tests
 

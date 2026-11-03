@@ -41,6 +41,7 @@
     "pg-mem": "^3.0.14",
     "supertest": "^7.1.0",
     "ts-jest": "^29.3.2",
+    "ts-node": "^10.9.2",
     "typescript": "^5.8.3",
     "typescript-eslint": "^8.31.0"
   }
