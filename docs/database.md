@@ -21,11 +21,32 @@ users 1─∞ quotations 1─∞ quotation_items
 | --------------- | ------------- | ------------------------ |
 | id              | uuid PK       |                          |
 | name            | varchar(100)  |                          |
-| email           | citext UNIQUE | validated at API layer   |
+| email           | varchar(255)  | UNIQUE; app stores trim+lowercase; functional `lower(email)` unique index guards raw SQL |
 | phone           | varchar(20)   | nullable                 |
 | password_hash   | text          | bcrypt; never returned   |
 | created_at      | timestamptz   |                          |
 | updated_at      | timestamptz   |                          |
+
+UNIQUE INDEX: `(email)`, `lower(email)`.
+
+### refresh_tokens
+
+Refresh credentials are stored only as SHA-256 hashes of the presented token;
+the plaintext token exists only on the client. Rotation marks the old row
+revoked and points it at its replacement; presenting a revoked hash revokes
+every session of that user (reuse detection).
+
+| Column          | Type          | Notes                    |
+| --------------- | ------------- | ------------------------ |
+| id              | uuid PK       |                          |
+| user_id         | uuid FK→users | CASCADE on delete; INDEX |
+| token_hash      | varchar(64)   | sha256 hex; UNIQUE       |
+| expires_at      | timestamptz   |                          |
+| revoked_at      | timestamptz   | nullable                 |
+| replaced_by_id  | uuid          | nullable; rotation chain |
+| created_at      | timestamptz   |                          |
+
+UNIQUE INDEX: `(token_hash)`. INDEX: `(user_id)`.
 
 ### vehicles
 

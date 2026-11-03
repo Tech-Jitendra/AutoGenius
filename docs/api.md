@@ -13,6 +13,15 @@ Base URL: `/api/v1` · All bodies are JSON · Auth via `Authorization: Bearer <a
 | POST   | /auth/logout    | Invalidate refresh token             |
 | GET    | /auth/me        | Current user profile                 |
 
+Conventions:
+- `register`/`login` return `{ user, accessToken, refreshToken }`; `user` never contains `passwordHash`.
+- Emails are trimmed + lowercased before storage; duplicates → `409`.
+- Login failures (wrong password or unknown email) return the same generic `401` to avoid account enumeration.
+- `refresh` rotates: the presented token is revoked and a new pair is issued; reusing a rotated token revokes all sessions of that user (`401`).
+- `logout` is idempotent → `204`; afterwards the refresh token is unusable.
+- Access tokens are short-lived JWTs; refresh tokens are opaque random strings stored hashed (SHA-256) in the database.
+- Rate limits (per client IP, sliding window): register/login `RATE_LIMIT_AUTH_MAX` per `RATE_LIMIT_TTL_MS`; refresh `RATE_LIMIT_REFRESH_MAX` per `RATE_LIMIT_TTL_MS`. Exceeding → `429`.
+
 ## Vehicles
 
 | Method | Endpoint          | Description            |
