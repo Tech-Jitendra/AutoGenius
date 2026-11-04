@@ -174,8 +174,9 @@ export class VehicleDto {
   @ApiProperty({
     nullable: true,
     type: String,
-    description: 'Stored in normalised form.',
-    example: 'MH12AB1234',
+    description:
+      'Stored uppercased and single-spaced; uniqueness ignores case and separators.',
+    example: 'MH 12 AB 1234',
   })
   registrationNumber!: string | null;
 

@@ -4,11 +4,21 @@ Base URL: `/api/v1` · All bodies are JSON · Auth via `Authorization: Bearer <a
 Modules through Vehicles (Tasks 01–03) are implemented; the sections after them are the V1
 contract and are built in Tasks 04–07.
 
+## Interactive documentation
+
+The implemented endpoints are described by an OpenAPI 3.0 document served outside the
+`/api/v1` prefix: UI at `/api/docs`, JSON at `/api/docs-json` (port 3001 locally). Both
+are served whenever `NODE_ENV` is not `production`, unless `SWAGGER_ENABLED=true|false`
+overrides that. `apps/api/src/docs/dto/` holds the documentation-only DTOs; validation
+still lives only in `@autogenius/validation`, and `test/docs-example-contract.spec.ts`
+fails if a documented example stops validating, if an endpoint loses its security
+marker, or if a credential column appears in a schema.
+
 ## Auth
 
 | Method | Endpoint        | Description                          |
 | ------ | --------------- | ------------------------------------ |
-| POST   | /auth/register  | Create account (name, email, password) |
+| POST   | /auth/register  | Create account (name, email, password, optional phone) |
 | POST   | /auth/login     | Returns access + refresh tokens      |
 | POST   | /auth/refresh   | Rotate tokens                        |
 | POST   | /auth/logout    | Invalidate refresh token             |
@@ -17,6 +27,7 @@ contract and are built in Tasks 04–07.
 Conventions:
 - `register`/`login` return `{ user, accessToken, refreshToken }`; `user` never contains `passwordHash`.
 - Emails are trimmed + lowercased before storage; duplicates → `409`.
+- `phone` is optional. Spaces, dots, hyphens and parentheses are stripped before validation, so `+91 98765 43210` and `+919876543210` are the same number and the canonical digits are what gets stored; anything left is `8`–`15` digits with an optional `+`, else `400`.
 - Login failures (wrong password or unknown email) return the same generic `401` to avoid account enumeration.
 - `refresh` rotates: the presented token is revoked and a new pair is issued; reusing a rotated token revokes all sessions of that user (`401`).
 - `logout` is idempotent → `204`; afterwards the refresh token is unusable.

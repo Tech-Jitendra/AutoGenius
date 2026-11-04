@@ -81,9 +81,12 @@ own env files as usual.
 | `JWT_REFRESH_SECRET` | Yes (validated) | min 32 chars. Currently unused by the code — refresh tokens are opaque random values stored as SHA-256 hashes, not JWTs |
 | `JWT_ACCESS_EXPIRES_IN` / `JWT_REFRESH_EXPIRES_IN` | No | default `15m` / `30d` |
 | `RATE_LIMIT_TTL_MS` / `RATE_LIMIT_AUTH_MAX` / `RATE_LIMIT_REFRESH_MAX` | No | default `60000` / `5` / `10` |
+| `SWAGGER_ENABLED` | No | unset = Swagger at `/api/docs` everywhere except production; `true`/`false` overrides either way |
 | `REDIS_HOST` / `REDIS_PORT` | No | defaults exist; nothing connects to Redis yet |
 | `QWEN_API_KEY` / `QWEN_BASE_URL` | No | may be left **empty** until Task 06; a non-empty `QWEN_BASE_URL` must still be a valid URL |
-| `EXPO_PUBLIC_API_URL` | No | the app falls back to `http://localhost:3001`, or `http://10.0.2.2:3001` on the Android emulator. Use your LAN IP for a physical device |
+
+`EXPO_PUBLIC_API_URL` does **not** belong in this file — Expo never reads the
+repository root. It lives in `apps/mobile/.env`; see [Mobile app](#mobile-app).
 
 ## Local development without Docker
 
@@ -100,6 +103,31 @@ uvicorn app.main:app --reload --port 8000
 ```
 
 Verify the API answers: `curl http://localhost:3001/api/v1/health`.
+
+### API documentation (Swagger UI)
+
+With the API running:
+
+| What | URL |
+| --- | --- |
+| Interactive docs | <http://localhost:3001/api/docs> |
+| OpenAPI 3.0 JSON | <http://localhost:3001/api/docs-json> |
+
+Both sit outside the `/api/v1` prefix on purpose: they describe the API instead
+of being another API resource. Every Auth and Vehicles endpoint is documented
+with its request body, validation rules, examples, success and error statuses,
+and whether it needs a bearer token.
+
+To exercise the protected endpoints: call `POST /auth/register` (or
+`/auth/login`) from the UI, copy `accessToken` from the response, paste it into
+**Authorize**, and the token is then sent on `GET /auth/me` and every
+`/vehicles` call. The Authorize value survives a page reload; **Cancel** clears
+it. `docs-example-contract.spec.ts` fails if a documented example stops
+validating against the shared Zod schemas, so the examples here are the rules
+the server actually applies.
+
+Set `SWAGGER_ENABLED=false` to hide both routes locally, or `SWAGGER_ENABLED=true`
+to expose them in production. Unset means "available outside production".
 
 ### Mobile app
 
@@ -121,7 +149,33 @@ makes Expo fall back to the legacy `expo/AppEntry.js` entry, which imports a
 non-existent root `App` component and fails with
 `Unable to resolve "../../App"`. There is intentionally no `App.tsx`.
 
-The project targets **SDK 57**, so it needs Expo Go for SDK 57 or a development
+#### Which API URL the app uses
+
+`apps/mobile/src/lib/api/config.ts` picks the first value that resolves:
+
+1. `EXPO_PUBLIC_API_URL` from **`apps/mobile/.env`** (copy `apps/mobile/.env.example`).
+   Expo reads env files from the directory it starts in — always `apps/mobile`
+   here — so the repository-root `.env` is never consulted for this key.
+2. While the app is served by `npx expo start`, the host part of the Expo
+   dev-server address (`Constants.expoConfig.hostUri`) with port `3001`. A phone
+   on the same Wi-Fi therefore finds the API without anyone editing an IP
+   address. Windows may prompt for a firewall rule the first time the API
+   listens; allow it on the private network.
+3. `http://10.0.2.2:3001` on the Android emulator (that alias means "the host
+   machine"), otherwise `http://localhost:3001`.
+
+Restart Metro after changing the value — `EXPO_PUBLIC_*` is inlined at bundle
+time, not read at runtime. If the app cannot reach the server it says so
+explicitly ("Cannot reach the AutoGenius API at …") instead of failing with a
+generic message.
+
+Registration and login are rate limited per IP (`RATE_LIMIT_AUTH_MAX`, default
+5 requests per `RATE_LIMIT_TTL_MS`, i.e. 5 per minute). Repeated test sign-ups
+inside a minute return `429 Too Many Requests`; wait for the window or raise
+`RATE_LIMIT_AUTH_MAX` in the repository-root `.env` while developing.
+
+
+ or a development
 build (`npx expo run:android`, or an EAS development build); a newer Expo Go
 will refuse to open it. Because `expo-secure-store` has native code, Expo Go
 support is limited to what it bundles — use a development build to test login
