@@ -12,12 +12,13 @@ export class RefreshTokensService {
   ) {}
 
   async create(input: {
+    id: string;
     userId: string;
     tokenHash: string;
     expiresAt: Date;
   }): Promise<RefreshTokenEntity> {
     const entity = this.tokens.create({
-      id: crypto.randomUUID(),
+      id: input.id,
       userId: input.userId,
       tokenHash: input.tokenHash,
       expiresAt: input.expiresAt,
@@ -25,6 +26,20 @@ export class RefreshTokensService {
       replacedById: null,
     });
     return this.tokens.save(entity);
+  }
+
+  /**
+   * Atomically transitions one token from active to revoked. PostgreSQL
+   * serializes concurrent UPDATEs on the same row, so when two requests
+   * present the same token only one of them sees `affected` = 1; the other is
+   * how a rotated token being replayed is caught.
+   */
+  async claim(oldTokenId: string, replacedById: string): Promise<boolean> {
+    const result = await this.tokens.update(
+      { id: oldTokenId, revokedAt: IsNull() },
+      { revokedAt: new Date(), replacedById },
+    );
+    return (result.affected ?? 0) === 1;
   }
 
   async findByPresentedToken(
@@ -35,14 +50,8 @@ export class RefreshTokensService {
     });
   }
 
-  async revoke(
-    token: RefreshTokenEntity,
-    replacedById?: string,
-  ): Promise<void> {
+  async revoke(token: RefreshTokenEntity): Promise<void> {
     token.revokedAt = new Date();
-    if (replacedById) {
-      token.replacedById = replacedById;
-    }
     await this.tokens.save(token);
   }
 

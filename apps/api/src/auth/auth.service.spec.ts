@@ -2,14 +2,27 @@ import {
   ConflictException,
   UnauthorizedException,
 } from '@nestjs/common';
+import { QueryFailedError } from 'typeorm';
 import { AuthService, toPublicUser } from './auth.service';
 import { PasswordHasher } from './password-hasher';
 import { TokensService } from './tokens.service';
 import { UsersService } from '../users/users.service';
 import { UserEntity } from '../users/user.entity';
 
-function makeUser(overrides: Partial<UserEntity> = {}): UserEntity {
-  return {
+// TypeORM copies the driver's SQLSTATE onto QueryFailedError, which is what
+// the register path keys on.
+function pgFailure(code: string, constraint?: string): QueryFailedError {
+  return new QueryFailedError(
+    'INSERT INTO "users" ...',
+    [],
+    Object.assign(new Error(`duplicate key for ${constraint ?? code}`), {
+      code,
+      constraint,
+    }),
+  );
+}
+
+function makeUser(overrides: Partial<UserEntity> = {}): UserEntity {  return {
     id: 'user-1',
     name: 'Jitendra',
     email: 'user@example.com',
@@ -77,6 +90,35 @@ describe('AuthService', () => {
         ConflictException,
       );
       expect(users.create).not.toHaveBeenCalled();
+    });
+
+    it('maps a PostgreSQL 23505 from a racing insert to a conflict', async () => {
+      // The pre-check saw no row; a parallel transaction inserted first.
+      users.existsByEmail.mockResolvedValue(false);
+      passwordHasher.hash.mockResolvedValue('hashed-password');
+      users.create.mockRejectedValue(pgFailure('23505', 'users_email_unique'));
+      tokens.issueTokenPair.mockResolvedValue({
+        accessToken: 'access',
+        refreshToken: 'refresh',
+      });
+
+      await expect(service.register(input)).rejects.toBeInstanceOf(
+        ConflictException,
+      );
+      expect(tokens.issueTokenPair).not.toHaveBeenCalled();
+    });
+
+    it('rethrows a database failure that is not a unique violation', async () => {
+      users.existsByEmail.mockResolvedValue(false);
+      passwordHasher.hash.mockResolvedValue('hashed-password');
+      users.create.mockRejectedValue(pgFailure('23503'));
+
+      await expect(service.register(input)).rejects.toMatchObject({
+        code: '23503',
+      });
+      await expect(service.register(input)).rejects.not.toBeInstanceOf(
+        ConflictException,
+      );
     });
   });
 

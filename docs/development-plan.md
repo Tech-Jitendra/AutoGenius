@@ -9,11 +9,11 @@
 - Docs: architecture, database, API, AI, development plan
 - **No business features.**
 
-### Task 02 — Authentication
+### Task 02 — Authentication ✅
 - users table + migration, register/login/refresh/logout/me, bcrypt, JWT pair,
   auth guard, rate limiting, mobile login/register screens + secure token storage.
 
-### Task 03 — Vehicle Module
+### Task 03 — Vehicle Module ✅
 - vehicles CRUD with ownership checks, indexes, mobile list/add/edit/details/delete
   with empty/loading/error states.
 

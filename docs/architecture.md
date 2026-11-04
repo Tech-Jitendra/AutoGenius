@@ -43,7 +43,7 @@ delivered as a mobile-first product with an admin console.
 
 | Layer      | Technology                    |
 | ---------- | ----------------------------- |
-| Mobile     | React Native + TypeScript (Expo) |
+| Mobile     | React Native + TypeScript (Expo), TanStack Query for server state |
 | API        | NestJS + TypeScript           |
 | Admin      | Next.js                       |
 | Database   | PostgreSQL                    |

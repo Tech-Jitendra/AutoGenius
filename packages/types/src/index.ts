@@ -17,11 +17,14 @@ export interface Vehicle {
   make: string;
   model: string;
   variant: string | null;
-  year: number;
+  registrationNumber: string | null;
+  manufacturingYear: number;
   fuelType: FuelType;
   transmission: TransmissionType;
-  registrationNumber: string | null;
-  currentOdometer: number;
+  /** Date-only (YYYY-MM-DD) column, so it is kept as a string to avoid timezone shifts. */
+  purchaseDate: string | null;
+  currentOdometer: number | null;
+  isDefault: boolean;
   createdAt: Date;
   updatedAt: Date;
 }

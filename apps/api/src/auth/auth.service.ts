@@ -4,6 +4,7 @@ import {
   UnauthorizedException,
 } from '@nestjs/common';
 import type { LoginInput, RegisterInput } from '@autogenius/validation';
+import { isUniqueViolation } from '../common/utils/postgres-errors';
 import { UsersService } from '../users/users.service';
 import { UserEntity } from '../users/user.entity';
 import { PasswordHasher } from './password-hasher';
@@ -38,12 +39,22 @@ export class AuthService {
       throw new ConflictException('Email already registered');
     }
     const passwordHash = await this.passwordHasher.hash(input.password);
-    const user = await this.users.create({
-      name: input.name,
-      email: input.email,
-      phone: input.phone,
-      passwordHash,
-    });
+    let user: UserEntity;
+    try {
+      user = await this.users.create({
+        name: input.name,
+        email: input.email,
+        phone: input.phone,
+        passwordHash,
+      });
+    } catch (error) {
+      // The read above is only a fast path; the unique indexes are the real
+      // guard, so two simultaneous registrations surface as 23505 here.
+      if (isUniqueViolation(error)) {
+        throw new ConflictException('Email already registered');
+      }
+      throw error;
+    }
     const tokens = await this.tokens.issueTokenPair(user);
     return { user: toPublicUser(user), ...tokens };
   }

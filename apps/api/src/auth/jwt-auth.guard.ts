@@ -10,6 +10,7 @@ import { JwtService } from '@nestjs/jwt';
 import type { Env } from '@autogenius/validation';
 import { ENV } from '../config/config.module';
 import { IS_PUBLIC_KEY } from '../common/decorators/public.decorator';
+import { ACCESS_TOKEN_ALGORITHM } from './tokens.service';
 
 @Injectable()
 export class JwtAuthGuard implements CanActivate {
@@ -38,6 +39,7 @@ export class JwtAuthGuard implements CanActivate {
     try {
       payload = await this.jwt.verifyAsync(token, {
         secret: this.env.JWT_ACCESS_SECRET,
+        algorithms: [ACCESS_TOKEN_ALGORITHM],
       });
     } catch {
       throw new UnauthorizedException('Invalid or expired token');

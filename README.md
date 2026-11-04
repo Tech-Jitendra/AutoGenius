@@ -181,13 +181,17 @@ port 5432 — only one of them can have it.
 
 ## Database migrations
 
-`apps/api/src/database/migrations/1791158400000-CreateAuthTables.ts` creates the
-`users` and `refresh_tokens` tables, including the `email` and `lower(email)`
-unique constraints. The API applies pending migrations automatically on boot
-(`migrationsRun: true`, `synchronize: false`). To run them by hand:
+Migrations live in `apps/api/src/database/migrations/`:
+`1791158400000-CreateAuthTables.ts` creates `users` and `refresh_tokens`, including the
+`email` and `lower(email)` unique constraints; `1793664000000-CreateVehicles.ts` creates
+`vehicles` with its CHECK constraints and partial unique indexes;
+`1793750400000-NormalizeVehicleRegistrationUniqueness.ts` re-keys the per-owner plate
+index so separator formatting cannot smuggle in a duplicate. The API applies pending
+migrations automatically on boot (`migrationsRun: true`, `synchronize: false`). To run
+them by hand:
 
 ```bash
-npm run migration:run -w @autogenius/api
+npm run migration:run -w @autogenius/api   # or: npm run api:migration:run
 ```
 
 `migration:run` uses `apps/api/src/database/data-source.ts`, which loads the
@@ -197,10 +201,23 @@ unknown database is not reversible.
 ## Running tests
 
 ```bash
-npm run test          # all JS/TS workspaces (jest)
+npm run test          # all JS/TS workspaces (jest, no database required)
 # AI service (Python):
 cd apps/ai-service && pytest
 ```
+
+The API's unit suites run against `pg-mem`, which cannot reproduce real
+PostgreSQL behaviour (row locking, `lower(email)` indexes, SQLSTATE codes).
+`apps/api/test/*.postgres.spec.ts` therefore runs the same auth and vehicle flows against
+a **live PostgreSQL** server using the root `.env` connection:
+
+```bash
+npm run api:test:postgres    # requires PostgreSQL running with migrations applied
+```
+
+They create users under `pg-e2e-<run-id>@example.com` / `pg-veh-<run-id>@example.com` and
+delete exactly those rows afterwards. They are excluded from `npm run test` so CI without a
+database still passes.
 
 ## Lint, typecheck, build
 

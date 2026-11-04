@@ -1,10 +1,16 @@
 import {
+  createVehicleSchema,
   loginSchema,
   logoutSchema,
+  MAX_ODOMETER_KM,
+  MIN_MANUFACTURING_YEAR,
   normalizeEmail,
+  normalizeRegistrationNumber,
   parseEnv,
   refreshSchema,
   registerSchema,
+  updateVehicleSchema,
+  vehicleIdSchema,
 } from './index';
 
 const validEnv = {
@@ -156,5 +162,165 @@ describe('refresh/logout schemas', () => {
 describe('normalizeEmail', () => {
   it('trims and lowercases', () => {
     expect(normalizeEmail('  User@Example.COM ')).toBe('user@example.com');
+  });
+});
+
+const currentYear = new Date().getFullYear();
+
+function isoDate(offsetDays: number): string {
+  const date = new Date();
+  date.setUTCDate(date.getUTCDate() + offsetDays);
+  return date.toISOString().slice(0, 10);
+}
+
+describe('normalizeRegistrationNumber', () => {
+  it('uppercases and collapses internal whitespace', () => {
+    expect(normalizeRegistrationNumber('  mh   12 ab   1234 ')).toBe('MH 12 AB 1234');
+  });
+});
+
+describe('createVehicleSchema', () => {
+  const valid = {
+    make: 'Maruti Suzuki',
+    model: 'Baleno',
+    manufacturingYear: 2019,
+    fuelType: 'PETROL',
+    transmission: 'MANUAL',
+  };
+
+  it('accepts the minimal payload and leaves optionals undefined', () => {
+    const parsed = createVehicleSchema.parse(valid);
+    expect(parsed).toEqual({ ...valid, variant: undefined, registrationNumber: undefined, purchaseDate: undefined, currentOdometer: undefined });
+  });
+
+  it('accepts a fully populated payload', () => {
+    const parsed = createVehicleSchema.parse({
+      ...valid,
+      variant: 'ZXi CVT',
+      registrationNumber: 'MH 12 AB 1234',
+      purchaseDate: '2019-06-15',
+      currentOdometer: 42_000,
+    });
+    expect(parsed.currentOdometer).toBe(42_000);
+    expect(parsed.purchaseDate).toBe('2019-06-15');
+  });
+
+  it('normalizes the registration number before validating it', () => {
+    const parsed = createVehicleSchema.parse({
+      ...valid,
+      registrationNumber: '  mh   12 ab  1234 ',
+    });
+    expect(parsed.registrationNumber).toBe('MH 12 AB 1234');
+  });
+
+  it('treats empty optional strings as unset instead of failing validation', () => {
+    const parsed = createVehicleSchema.parse({
+      ...valid,
+      variant: '',
+      registrationNumber: '',
+      purchaseDate: '',
+      currentOdometer: '',
+    });
+    expect(parsed.variant).toBeUndefined();
+    expect(parsed.registrationNumber).toBeUndefined();
+    expect(parsed.purchaseDate).toBeUndefined();
+    expect(parsed.currentOdometer).toBeUndefined();
+  });
+
+  it('keeps an explicit null so callers can clear a field', () => {
+    const parsed = createVehicleSchema.parse({
+      ...valid,
+      variant: null,
+      registrationNumber: null,
+      purchaseDate: null,
+      currentOdometer: null,
+    });
+    expect(parsed.variant).toBeNull();
+    expect(parsed.registrationNumber).toBeNull();
+    expect(parsed.purchaseDate).toBeNull();
+    expect(parsed.currentOdometer).toBeNull();
+  });
+
+  it('coerces numeric strings coming from mobile inputs', () => {
+    const parsed = createVehicleSchema.parse({
+      ...valid,
+      manufacturingYear: '2021',
+      currentOdometer: '0',
+    });
+    expect(parsed.manufacturingYear).toBe(2021);
+    expect(parsed.currentOdometer).toBe(0);
+  });
+
+  it.each([
+    ['make', { ...valid, make: '' }],
+    ['model', { ...valid, model: '' }],
+    ['make over 50 chars', { ...valid, make: 'x'.repeat(51) }],
+    ['variant over 50 chars', { ...valid, variant: 'x'.repeat(51) }],
+    ['unknown fuelType', { ...valid, fuelType: 'PETTROL' }],
+    ['unknown transmission', { ...valid, transmission: 'DCT' }],
+    ['registration with symbols', { ...valid, registrationNumber: 'MH-12-AB@1234' }],
+    ['short registration', { ...valid, registrationNumber: 'MH12' }],
+    ['impossible purchase date', { ...valid, purchaseDate: '2019-02-30' }],
+    ['malformed purchase date', { ...valid, purchaseDate: '15/06/2019' }],
+    ['future purchase date', { ...valid, purchaseDate: isoDate(1) }],
+    ['negative odometer', { ...valid, currentOdometer: -1 }],
+    ['fractional odometer', { ...valid, currentOdometer: 12.5 }],
+    ['odometer above the cap', { ...valid, currentOdometer: MAX_ODOMETER_KM + 1 }],
+  ])('rejects %s', (_label, input) => {
+    expect(createVehicleSchema.safeParse(input).success).toBe(false);
+  });
+
+  it('accepts today as a purchase date but rejects next year', () => {
+    expect(createVehicleSchema.safeParse({ ...valid, purchaseDate: isoDate(0) }).success).toBe(true);
+    expect(createVehicleSchema.safeParse({ ...valid, purchaseDate: isoDate(30) }).success).toBe(false);
+  });
+
+  it('bounds the manufacturing year', () => {
+    expect(createVehicleSchema.safeParse({ ...valid, manufacturingYear: MIN_MANUFACTURING_YEAR }).success).toBe(true);
+    expect(createVehicleSchema.safeParse({ ...valid, manufacturingYear: MIN_MANUFACTURING_YEAR - 1 }).success).toBe(false);
+    expect(createVehicleSchema.safeParse({ ...valid, manufacturingYear: currentYear + 1 }).success).toBe(true);
+    expect(createVehicleSchema.safeParse({ ...valid, manufacturingYear: currentYear + 2 }).success).toBe(false);
+  });
+
+  it('reports the field that failed', () => {
+    const result = createVehicleSchema.safeParse({ ...valid, fuelType: 'PETTROL' });
+    expect(result.success).toBe(false);
+    if (!result.success) {
+      expect(result.error.issues[0]?.path).toEqual(['fuelType']);
+    }
+  });
+});
+
+describe('updateVehicleSchema', () => {
+  it('accepts a single changed field', () => {
+    const parsed = updateVehicleSchema.parse({ currentOdometer: 51_000 });
+    expect(parsed.currentOdometer).toBe(51_000);
+  });
+
+  it('rejects an empty body', () => {
+    expect(updateVehicleSchema.safeParse({}).success).toBe(false);
+  });
+
+  it('rejects a body whose only field is blank', () => {
+    expect(updateVehicleSchema.safeParse({ variant: '' }).success).toBe(false);
+  });
+
+  it('accepts an explicit null as a request to clear a field', () => {
+    const parsed = updateVehicleSchema.parse({ registrationNumber: null });
+    expect(parsed.registrationNumber).toBeNull();
+  });
+
+  it('still validates the values it does receive', () => {
+    expect(updateVehicleSchema.safeParse({ transmission: 'DCT' }).success).toBe(false);
+    expect(updateVehicleSchema.safeParse({ manufacturingYear: 1899 }).success).toBe(false);
+  });
+});
+
+describe('vehicleIdSchema', () => {
+  it('accepts a UUID and rejects anything else', () => {
+    expect(vehicleIdSchema.parse('3f2b6c1a-9d4e-4a7b-8c1f-0a2b5d6e7f80')).toBe(
+      '3f2b6c1a-9d4e-4a7b-8c1f-0a2b5d6e7f80',
+    );
+    expect(vehicleIdSchema.safeParse('not-a-uuid').success).toBe(false);
   });
 });

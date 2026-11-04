@@ -15,6 +15,9 @@ export interface AuthTokens {
 
 const durationPattern = /^(\d+)(s|m|h|d|w)$/;
 
+/** Signing and verification must agree on exactly one algorithm. */
+export const ACCESS_TOKEN_ALGORITHM = 'HS256';
+
 export function durationToMs(duration: string): number {
   const match = durationPattern.exec(duration);
   if (!match) {
@@ -42,19 +45,36 @@ export class TokensService {
 
   async issueTokenPair(user: UserEntity): Promise<AuthTokens> {
     const accessToken = this.signAccessToken(user.id, user.email);
-    const { token: refreshToken } = await this.createRefreshToken(user.id);
+    const refreshToken = await this.createRefreshToken(user.id);
     return { accessToken, refreshToken };
   }
 
   async rotateRefreshToken(presentedToken: string): Promise<AuthTokens> {
     const existing = await this.findActiveOrFail(presentedToken);
 
-    const { token: newRefreshToken, entity: newRow } =
-      await this.createRefreshToken(existing.userId);
-    await this.refreshTokens.revoke(existing, newRow.id);
+    const refreshToken = randomBytes(48).toString('base64url');
+    const replacementId = crypto.randomUUID();
 
-    const accessToken = this.signAccessToken(existing.userId);
-    return { accessToken, refreshToken: newRefreshToken };
+    // The replacement row is inserted before the old one is claimed on purpose.
+    // If a second request replays the same token, its reuse sweep has to find
+    // this row already present; claiming first would let the winner insert an
+    // active token after the sweep and keep a live session alive.
+    await this.refreshTokens.create({
+      id: replacementId,
+      userId: existing.userId,
+      tokenHash: hashRefreshToken(refreshToken),
+      expiresAt: this.refreshTokenExpiry(),
+    });
+
+    if (!(await this.refreshTokens.claim(existing.id, replacementId))) {
+      await this.refreshTokens.revokeAllForUser(existing.userId);
+      throw new UnauthorizedException('Invalid refresh token');
+    }
+
+    return {
+      accessToken: this.signAccessToken(existing.userId),
+      refreshToken,
+    };
   }
 
   async revokeRefreshToken(presentedToken: string): Promise<void> {
@@ -69,24 +89,28 @@ export class TokensService {
     return this.jwt.sign(
       email ? { sub, email } : { sub },
       {
+        algorithm: ACCESS_TOKEN_ALGORITHM,
         secret: this.env.JWT_ACCESS_SECRET,
         expiresIn: this.env.JWT_ACCESS_EXPIRES_IN,
       } as JwtSignOptions,
     );
   }
 
-  private async createRefreshToken(
-    userId: string,
-  ): Promise<{ token: string; entity: RefreshTokenEntity }> {
+  private async createRefreshToken(userId: string): Promise<string> {
     const token = randomBytes(48).toString('base64url');
-    const entity = await this.refreshTokens.create({
+    await this.refreshTokens.create({
+      id: crypto.randomUUID(),
       userId,
       tokenHash: hashRefreshToken(token),
-      expiresAt: new Date(
-        Date.now() + durationToMs(this.env.JWT_REFRESH_EXPIRES_IN),
-      ),
+      expiresAt: this.refreshTokenExpiry(),
     });
-    return { token, entity };
+    return token;
+  }
+
+  private refreshTokenExpiry(): Date {
+    return new Date(
+      Date.now() + durationToMs(this.env.JWT_REFRESH_EXPIRES_IN),
+    );
   }
 
   private async findActiveOrFail(

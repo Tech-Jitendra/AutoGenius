@@ -1,7 +1,8 @@
 # AutoGenius — API Design
 
 Base URL: `/api/v1` · All bodies are JSON · Auth via `Authorization: Bearer <accessToken>`
-(Unimplemented modules below are the V1 contract; they are built in Tasks 02–07.)
+Modules through Vehicles (Tasks 01–03) are implemented; the sections after them are the V1
+contract and are built in Tasks 04–07.
 
 ## Auth
 
@@ -24,16 +25,56 @@ Conventions:
 
 ## Vehicles
 
-| Method | Endpoint          | Description            |
-| ------ | ----------------- | ---------------------- |
-| GET    | /vehicles         | List my vehicles       |
-| POST   | /vehicles         | Add vehicle            |
-| GET    | /vehicles/:id     | Vehicle details        |
-| PATCH  | /vehicles/:id     | Edit vehicle           |
-| DELETE | /vehicles/:id     | Delete vehicle         |
+| Method | Endpoint                | Description                       |
+| ------ | ----------------------- | --------------------------------- |
+| POST   | /vehicles               | Add vehicle → `201`               |
+| GET    | /vehicles               | List my vehicles                  |
+| GET    | /vehicles/:id           | Vehicle details                   |
+| PATCH  | /vehicles/:id/default   | Set as the default vehicle        |
+| PATCH  | /vehicles/:id           | Edit vehicle                      |
+| DELETE | /vehicles/:id           | Delete vehicle → `204`            |
 
-Fields: `make, model, variant, year, fuelType, transmission, registrationNumber, currentOdometer`
-Ownership rule: a user can only access their own vehicles (enforced in the service layer).
+Write fields (`POST`; all trimmed by the shared Zod schema):
+
+```json
+{
+  "make": "Maruti Suzuki",
+  "model": "Baleno",
+  "variant": "ZXi CVT",
+  "registrationNumber": "MH 12 AB 1234",
+  "manufacturingYear": 2019,
+  "fuelType": "PETROL",
+  "transmission": "CVT",
+  "purchaseDate": "2019-06-15",
+  "currentOdometer": 42000
+}
+```
+
+`make`, `model`, `manufacturingYear`, `fuelType` and `transmission` are required;
+`variant`, `registrationNumber`, `purchaseDate` and `currentOdometer` are optional.
+`fuelType` ∈ `PETROL|DIESEL|CNG|HYBRID|ELECTRIC`, `transmission` ∈ `MANUAL|AUTOMATIC|AMT|CVT`,
+`manufacturingYear` ∈ 1900…next year, `currentOdometer` ∈ 0…2 000 000,
+`purchaseDate` is a real calendar date and cannot be in the future.
+Registration numbers are stored normalised to upper case with single spaces.
+
+Responses are `{ id, userId, make, …, isDefault, createdAt, updatedAt }` — never the owner's password or tokens.
+
+Conventions:
+- **Ownership**: every query is scoped by vehicle id **and** the authenticated user id
+  (`WHERE id = :id AND user_id = :userId`). A vehicle that belongs to someone else answers
+  `404`, exactly like a vehicle that does not exist, so ids cannot be probed. There is no
+  endpoint that reads a vehicle by id alone.
+- `:id` must be a UUID → `400` otherwise (validated before it reaches SQL).
+- Validation failures → `400` with the Zod message; no driver output or SQL is ever included.
+- A registration number that the caller already uses on another vehicle → `409`.
+  Only that conflict is mapped; any other database error stays a generic `500`.
+- `PATCH` is partial: an omitted key leaves the field untouched, `null` clears it, and an
+  empty body → `400`.
+- Defaults: the first vehicle of a user becomes the default automatically; promoting another
+  one unsets the previous default atomically (one transaction, one row lock, plus a partial
+  unique index at the database level). Deleting the default promotes another owned vehicle if
+  one exists. `PATCH /:id/default` on the vehicle that is already default is a no-op `200`.
+- `GET /vehicles` returns the default first, then newest first. No pagination in V1.
 
 ## Expenses
 
