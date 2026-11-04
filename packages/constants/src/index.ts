@@ -25,6 +25,27 @@ export const MAINTENANCE_CATEGORIES = [
 
 export type MaintenanceCategory = (typeof MAINTENANCE_CATEGORIES)[number];
 
+/** Every maintenance category is also a service type, plus a catch-all. */
+export const SERVICE_TYPES = [...MAINTENANCE_CATEGORIES, 'OTHER'] as const;
+
+export type ServiceType = (typeof SERVICE_TYPES)[number];
+
+export const REMINDER_STATUSES = ['ACTIVE', 'COMPLETED', 'DISMISSED'] as const;
+
+export type ReminderStatus = (typeof REMINDER_STATUSES)[number];
+
+export const MAINTENANCE_ALERT_STATUSES = [
+  'OVERDUE',
+  'UPCOMING',
+  'SCHEDULED',
+] as const;
+
+export type MaintenanceAlertStatus = (typeof MAINTENANCE_ALERT_STATUSES)[number];
+
+/** "Upcoming" windows. Outside both, an active reminder is merely scheduled. */
+export const UPCOMING_DUE_WINDOW_DAYS = 30;
+export const UPCOMING_DUE_WINDOW_KM = 1000;
+
 export const QUOTATION_ASSESSMENTS = [
   'NECESSARY',
   'REVIEW',

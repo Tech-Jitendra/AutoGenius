@@ -37,6 +37,10 @@ export function setupSwagger(app: INestApplication, env: Env): boolean {
     )
     .addTag('Authentication', 'Registration, sign-in, token rotation and the current user.')
     .addTag('Vehicles', 'The signed-in user’s vehicle records.')
+    .addTag(
+      'Service history',
+      'Workshop visits, maintenance reminders and the upkeep summary of one vehicle.',
+    )
     .addTag('System', 'Service liveness.')
     .build();
 

@@ -50,32 +50,93 @@ export interface Expense {
   createdAt: Date;
 }
 
-export type MaintenanceStatus = 'OK' | 'DUE_SOON' | 'OVERDUE';
+/**
+ * A service record is one workshop visit. The vocabulary intentionally reuses
+ * the maintenance categories so a reminder and the record that closes it can be
+ * matched by name instead of by free text.
+ */
+export type ServiceType =
+  | 'OIL_CHANGE'
+  | 'BRAKE_INSPECTION'
+  | 'TYRE_REPLACEMENT'
+  | 'BATTERY'
+  | 'AIR_FILTER'
+  | 'COOLANT'
+  | 'GENERAL_SERVICE'
+  | 'OTHER';
 
-export interface MaintenanceItem {
-  id: string;
-  vehicleId: string;
-  category: string;
+/** One line of `parts_replaced`. Quantity and cost are optional: garages often give neither. */
+export interface ReplacedPart {
   name: string;
-  lastServiceDate: Date | null;
-  lastOdometer: number | null;
-  nextDueDate: Date | null;
-  nextDueOdometer: number | null;
-  status: MaintenanceStatus;
-  notes: string | null;
+  quantity: number | null;
+  cost: number | null;
 }
 
-export interface VehicleServiceRecord {
+export interface ServiceRecord {
   id: string;
   vehicleId: string;
-  serviceDate: Date;
-  odometer: number | null;
-  serviceType: string;
-  description: string | null;
+  /** Date-only (YYYY-MM-DD) column, kept as a string so it cannot shift with the timezone. */
+  serviceDate: string;
+  odometerKm: number | null;
   workshopName: string | null;
-  totalCost: number | null;
+  serviceType: ServiceType;
+  description: string | null;
+  partsReplaced: ReplacedPart[];
+  labourCost: number;
+  partsCost: number;
+  otherCost: number;
+  /** Always labour + parts + other, computed by the API and never supplied by the client. */
+  totalCost: number;
   notes: string | null;
   createdAt: Date;
+  updatedAt: Date;
+}
+
+/** Stored column value: where the reminder is in its own life cycle. */
+export type ReminderStatus = 'ACTIVE' | 'COMPLETED' | 'DISMISSED';
+
+/**
+ * Computed by the API on every read — never stored, because it depends on
+ * today's date and on the vehicle's latest odometer. Null for reminders that are
+ * no longer ACTIVE, so closed history can never surface as overdue.
+ */
+export type MaintenanceAlertStatus = 'OVERDUE' | 'UPCOMING' | 'SCHEDULED';
+
+export interface MaintenanceReminder {
+  id: string;
+  vehicleId: string;
+  title: string;
+  description: string | null;
+  dueDate: string | null;
+  dueOdometerKm: number | null;
+  intervalMonths: number | null;
+  intervalKm: number | null;
+  lastCompletedDate: string | null;
+  lastCompletedOdometerKm: number | null;
+  status: ReminderStatus;
+  alertStatus: MaintenanceAlertStatus | null;
+  createdAt: Date;
+  updatedAt: Date;
+}
+
+export interface MaintenanceSummary {
+  vehicleId: string;
+  totalServiceRecords: number;
+  totalExpenditure: number;
+  lastServiceDate: string | null;
+  lastServiceOdometer: number | null;
+  activeReminders: number;
+  overdueReminders: number;
+  upcomingReminders: number;
+}
+
+/** Cursor-free offset page: service history is small enough to jump around in. */
+export interface Page<T> {
+  items: T[];
+  page: number;
+  pageSize: number;
+  totalItems: number;
+  totalPages: number;
 }
 
 export interface AiConversation {

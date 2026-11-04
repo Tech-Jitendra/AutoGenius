@@ -86,8 +86,37 @@ export type LogoutInput = z.infer<typeof logoutSchema>;
 export const FUEL_TYPES = ['PETROL', 'DIESEL', 'CNG', 'HYBRID', 'ELECTRIC'] as const;
 export const TRANSMISSION_TYPES = ['MANUAL', 'AUTOMATIC', 'AMT', 'CVT'] as const;
 
+/** Service record types. Mirrors `@autogenius/constants` SERVICE_TYPES. */
+export const SERVICE_TYPES = [
+  'OIL_CHANGE',
+  'BRAKE_INSPECTION',
+  'TYRE_REPLACEMENT',
+  'BATTERY',
+  'AIR_FILTER',
+  'COOLANT',
+  'GENERAL_SERVICE',
+  'OTHER',
+] as const;
+
+/** Stored reminder life-cycle states. */
+export const REMINDER_STATUSES = ['ACTIVE', 'COMPLETED', 'DISMISSED'] as const;
+
+/** Computed urgency of an ACTIVE reminder. */
+export const MAINTENANCE_ALERT_STATUSES = [
+  'OVERDUE',
+  'UPCOMING',
+  'SCHEDULED',
+] as const;
+
 export const MIN_MANUFACTURING_YEAR = 1900;
 export const MAX_ODOMETER_KM = 2_000_000;
+
+/** Money lives in NUMERIC(12,2) columns; this is the per-component ceiling. */
+export const MAX_COST = 10_000_000;
+export const MAX_INTERVAL_MONTHS = 120;
+export const MAX_PARTS_PER_RECORD = 100;
+export const DEFAULT_PAGE_SIZE = 20;
+export const MAX_PAGE_SIZE = 100;
 
 /** Indian plates are stored trimmed, uppercased and single-spaced: `mh 12 ab 1234` → `MH 12 AB 1234`. */
 export function normalizeRegistrationNumber(value: string): string {
@@ -131,13 +160,71 @@ const registrationNumberSchema = z
     'Use 5-20 letters, digits, spaces or hyphens',
   );
 
-const isoDateSchema = z
+const calendarDateSchema = z
   .string()
-  .refine(isRealIsoDate, 'Expected a real calendar date as YYYY-MM-DD')
-  .refine(
-    (value) => value <= todayIsoDate(),
-    'Purchase date cannot be in the future',
-  );
+  .refine(isRealIsoDate, 'Expected a real calendar date as YYYY-MM-DD');
+
+const isNotInFuture = (value: string): boolean => value <= todayIsoDate();
+
+/** Vehicle purchase and service dates are both bounded by today. */
+const isoDateSchema = calendarDateSchema.refine(
+  isNotInFuture,
+  'Purchase date cannot be in the future',
+);
+
+const pastCalendarDateSchema = calendarDateSchema.refine(
+  isNotInFuture,
+  'Service date cannot be in the future',
+);
+
+const wholeOdometerSchema = z.coerce
+  .number()
+  .int('Odometer must be a whole number of kilometres')
+  .min(0, 'Odometer cannot be negative')
+  .max(MAX_ODOMETER_KM, `Odometer cannot exceed ${MAX_ODOMETER_KM} km`);
+
+/** Optional odometer: absent/empty means unset, explicit null clears the reading. */
+const optionalOdometerSchema = z.preprocess(
+  emptyToUndefined,
+  wholeOdometerSchema.nullable().optional(),
+);
+
+/**
+ * Money as the client sends it: coerced from a string or number, always rounded
+ * to the two decimals the NUMERIC(12,2) column can hold, never negative.
+ */
+const moneySchema = z.coerce
+  .number()
+  .min(0, 'Cost cannot be negative')
+  .max(MAX_COST, `Cost cannot exceed ${MAX_COST}`)
+  .transform((value) => Math.round(value * 100) / 100);
+
+const optionalMoneySchema = z.preprocess(emptyToUndefined, moneySchema.optional());
+
+const optionalTextSchema = (maxLength: number) =>
+  optionalString(z.string().trim().min(1).max(maxLength));
+
+/** PATCH guard: an empty body would otherwise be a silent no-op. */
+const hasAnyField = (value: Record<string, unknown>): boolean =>
+  Object.values(value).some((field) => field !== undefined);
+
+const AT_LEAST_ONE_FIELD = 'Provide at least one field to update';
+
+/** A part line: only the name is mandatory, garages bill quantity and price unevenly. */
+const replacedPartSchema = z.object({
+  name: z.string().trim().min(1).max(120),
+  quantity: z.preprocess(
+    emptyToUndefined,
+    z.coerce
+      .number()
+      .int('Part quantity must be a whole number')
+      .min(1, 'Part quantity must be at least 1')
+      .max(9999, 'Part quantity looks unrealistic')
+      .nullable()
+      .optional(),
+  ),
+  cost: z.preprocess(emptyToUndefined, moneySchema.nullable().optional()),
+});
 
 export const createVehicleSchema = z.object({
   make: z.string().trim().min(1).max(50),
@@ -155,24 +242,12 @@ export const createVehicleSchema = z.object({
   transmission: z.enum(TRANSMISSION_TYPES),
   registrationNumber: optionalString(registrationNumberSchema),
   purchaseDate: optionalString(isoDateSchema),
-  currentOdometer: z.preprocess(
-    emptyToUndefined,
-    z.coerce
-      .number()
-      .int('Odometer must be a whole number of kilometres')
-      .min(0, 'Odometer cannot be negative')
-      .max(MAX_ODOMETER_KM, `Odometer cannot exceed ${MAX_ODOMETER_KM} km`)
-      .nullable()
-      .optional(),
-  ),
+  currentOdometer: optionalOdometerSchema,
 });
 
 export const updateVehicleSchema = createVehicleSchema
   .partial()
-  .refine(
-    (value) => Object.values(value).some((field) => field !== undefined),
-    'Provide at least one field to update',
-  );
+  .refine(hasAnyField, AT_LEAST_ONE_FIELD);
 
 export const vehicleIdSchema = z.string().uuid('Vehicle id must be a UUID');
 
@@ -180,3 +255,183 @@ export type CreateVehicleInput = z.infer<typeof createVehicleSchema>;
 export type UpdateVehicleInput = z.infer<typeof updateVehicleSchema>;
 export type FuelTypeInput = z.infer<typeof createVehicleSchema>['fuelType'];
 export type TransmissionInput = z.infer<typeof createVehicleSchema>['transmission'];
+
+// ---------------------------------------------------------------------------
+// Service history (Task 04)
+// ---------------------------------------------------------------------------
+
+/**
+ * `total_cost` is never part of the input: the API stores labour + parts + other
+ * and a database CHECK keeps the three in agreement, so a client cannot invent a
+ * total that does not match its components.
+ */
+export const createServiceRecordSchema = z.object({
+  serviceDate: pastCalendarDateSchema,
+  odometerKm: optionalOdometerSchema,
+  workshopName: optionalTextSchema(120),
+  serviceType: z.enum(SERVICE_TYPES),
+  description: optionalTextSchema(2000),
+  partsReplaced: z.preprocess(
+    emptyToUndefined,
+    z.array(replacedPartSchema).max(
+      MAX_PARTS_PER_RECORD,
+      `A record can list at most ${MAX_PARTS_PER_RECORD} parts`,
+    ).optional(),
+  ),
+  labourCost: optionalMoneySchema,
+  partsCost: optionalMoneySchema,
+  otherCost: optionalMoneySchema,
+  notes: optionalTextSchema(2000),
+});
+
+export const updateServiceRecordSchema = createServiceRecordSchema
+  .partial()
+  .refine(hasAnyField, AT_LEAST_ONE_FIELD);
+
+export const serviceRecordIdSchema = z.string().uuid(
+  'Service record id must be a UUID',
+);
+
+export const serviceRecordQuerySchema = z
+  .object({
+    page: z.preprocess(
+      emptyToUndefined,
+      z.coerce.number().int().min(1, 'Page must be 1 or more').default(1),
+    ),
+    pageSize: z.preprocess(
+      emptyToUndefined,
+      z.coerce
+        .number()
+        .int()
+        .min(1, 'Page size must be 1 or more')
+        .max(MAX_PAGE_SIZE, `Page size cannot exceed ${MAX_PAGE_SIZE}`)
+        .default(DEFAULT_PAGE_SIZE),
+    ),
+    from: z.preprocess(emptyToUndefined, calendarDateSchema.optional()),
+    to: z.preprocess(emptyToUndefined, calendarDateSchema.optional()),
+    serviceType: z.preprocess(emptyToUndefined, z.enum(SERVICE_TYPES).optional()),
+  })
+  .refine(
+    (value) => value.from === undefined || value.to === undefined || value.from <= value.to,
+    'from cannot be later than to',
+  );
+
+export type CreateServiceRecordInput = z.infer<typeof createServiceRecordSchema>;
+export type UpdateServiceRecordInput = z.infer<typeof updateServiceRecordSchema>;
+export type ServiceRecordQuery = z.infer<typeof serviceRecordQuerySchema>;
+export type ServiceTypeInput = CreateServiceRecordInput['serviceType'];
+export type ReplacedPartInput = z.infer<typeof replacedPartSchema>;
+
+// ---------------------------------------------------------------------------
+// Maintenance reminders (Task 04)
+// ---------------------------------------------------------------------------
+
+/**
+ * Both due values are optional on their own, but a reminder without either has
+ * no way to ever become due, so the pair is validated together. The service
+ * applies the same rule to the merged state on PATCH, where the client only
+ * sends the fields it changed.
+ */
+export function reminderHasDueCondition(value: {
+  dueDate?: string | null;
+  dueOdometerKm?: number | null;
+}): boolean {
+  return value.dueDate != null || value.dueOdometerKm != null;
+}
+
+export const REMINDER_DUE_CONDITION_MESSAGE =
+  'A reminder needs a due date or a due odometer reading';
+
+const maintenanceReminderBaseSchema = z.object({
+  title: z.string().trim().min(1).max(120),
+  description: optionalTextSchema(2000),
+  dueDate: optionalString(calendarDateSchema),
+  dueOdometerKm: optionalOdometerSchema,
+  intervalMonths: z.preprocess(
+    emptyToUndefined,
+    z.coerce
+      .number()
+      .int('Interval in months must be a whole number')
+      .min(1, 'Interval in months must be at least 1')
+      .max(
+        MAX_INTERVAL_MONTHS,
+        `Interval in months cannot exceed ${MAX_INTERVAL_MONTHS}`,
+      )
+      .nullable()
+      .optional(),
+  ),
+  intervalKm: z.preprocess(
+    emptyToUndefined,
+    z.coerce
+      .number()
+      .int('Interval in kilometres must be a whole number')
+      .min(1, 'Interval in kilometres must be at least 1')
+      .max(MAX_ODOMETER_KM, `Interval cannot exceed ${MAX_ODOMETER_KM} km`)
+      .nullable()
+      .optional(),
+  ),
+  lastCompletedDate: optionalString(calendarDateSchema),
+  lastCompletedOdometerKm: optionalOdometerSchema,
+});
+
+export const createMaintenanceReminderSchema = maintenanceReminderBaseSchema.refine(
+  reminderHasDueCondition,
+  REMINDER_DUE_CONDITION_MESSAGE,
+);
+
+/**
+ * PATCH sends a subset, so the due-condition rule cannot be checked here — the
+ * service validates it against the merged reminder instead.
+ */
+export const updateMaintenanceReminderSchema = maintenanceReminderBaseSchema
+  .partial()
+  .refine(hasAnyField, AT_LEAST_ONE_FIELD);
+
+/** Completing a reminder always records when it happened and how far the car had come. */
+export const completeMaintenanceReminderSchema = z.object({
+  completionDate: pastCalendarDateSchema,
+  completionOdometerKm: z.preprocess(emptyToUndefined, wholeOdometerSchema),
+});
+
+export const maintenanceReminderIdSchema = z.string().uuid(
+  'Reminder id must be a UUID',
+);
+
+export const maintenanceReminderQuerySchema = z.object({
+  page: z.preprocess(
+    emptyToUndefined,
+    z.coerce.number().int().min(1, 'Page must be 1 or more').default(1),
+  ),
+  pageSize: z.preprocess(
+    emptyToUndefined,
+    z.coerce
+      .number()
+      .int()
+      .min(1, 'Page size must be 1 or more')
+      .max(MAX_PAGE_SIZE, `Page size cannot exceed ${MAX_PAGE_SIZE}`)
+      .default(DEFAULT_PAGE_SIZE),
+  ),
+  status: z.preprocess(
+    (value) =>
+      typeof value === 'string' ? value.trim().toUpperCase() : emptyToUndefined(value),
+    z.enum(REMINDER_STATUSES).optional(),
+  ),
+  due: z.preprocess(
+    (value) =>
+      typeof value === 'string' ? value.trim().toUpperCase() : emptyToUndefined(value),
+    z.enum(MAINTENANCE_ALERT_STATUSES).optional(),
+  ),
+});
+
+export type CreateMaintenanceReminderInput = z.infer<
+  typeof createMaintenanceReminderSchema
+>;
+export type UpdateMaintenanceReminderInput = z.infer<
+  typeof updateMaintenanceReminderSchema
+>;
+export type CompleteMaintenanceReminderInput = z.infer<
+  typeof completeMaintenanceReminderSchema
+>;
+export type MaintenanceReminderQuery = z.infer<
+  typeof maintenanceReminderQuerySchema
+>;

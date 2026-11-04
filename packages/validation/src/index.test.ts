@@ -1,14 +1,29 @@
 import {
+  completeMaintenanceReminderSchema,
+  createMaintenanceReminderSchema,
+  createServiceRecordSchema,
   createVehicleSchema,
+  DEFAULT_PAGE_SIZE,
   loginSchema,
   logoutSchema,
+  maintenanceReminderIdSchema,
+  maintenanceReminderQuerySchema,
+  MAX_COST,
+  MAX_INTERVAL_MONTHS,
   MAX_ODOMETER_KM,
+  MAX_PAGE_SIZE,
+  MAX_PARTS_PER_RECORD,
   MIN_MANUFACTURING_YEAR,
   normalizeEmail,
   normalizeRegistrationNumber,
   parseEnv,
   refreshSchema,
   registerSchema,
+  REMINDER_DUE_CONDITION_MESSAGE,
+  serviceRecordIdSchema,
+  serviceRecordQuerySchema,
+  updateMaintenanceReminderSchema,
+  updateServiceRecordSchema,
   updateVehicleSchema,
   vehicleIdSchema,
 } from './index';
@@ -376,5 +391,246 @@ describe('vehicleIdSchema', () => {
       '3f2b6c1a-9d4e-4a7b-8c1f-0a2b5d6e7f80',
     );
     expect(vehicleIdSchema.safeParse('not-a-uuid').success).toBe(false);
+  });
+});
+
+describe('createServiceRecordSchema', () => {
+  const valid = { serviceDate: '2026-03-14', serviceType: 'GENERAL_SERVICE' };
+
+  it('accepts the minimal payload', () => {
+    const parsed = createServiceRecordSchema.parse(valid);
+    expect(parsed).toEqual({ ...valid, workshopName: undefined });
+  });
+
+  it('keeps parts as structured lines and defaults blanks to undefined', () => {
+    const parsed = createServiceRecordSchema.parse({
+      ...valid,
+      workshopName: 'City Auto',
+      description: '',
+      partsReplaced: [
+        { name: 'Oil filter', quantity: '1', cost: '450.5' },
+        { name: 'Engine oil 5W-30', quantity: '', cost: '' },
+      ],
+      labourCost: '1200',
+    });
+    expect(parsed.description).toBeUndefined();
+    expect(parsed.partsReplaced).toEqual([
+      { name: 'Oil filter', quantity: 1, cost: 450.5 },
+      { name: 'Engine oil 5W-30', quantity: undefined, cost: undefined },
+    ]);
+    expect(parsed.labourCost).toBe(1200);
+  });
+
+  it('rounds money to the two decimals the column can store', () => {
+    const parsed = createServiceRecordSchema.parse({ ...valid, partsCost: 1234.567 });
+    expect(parsed.partsCost).toBe(1234.57);
+  });
+
+  it.each([
+    ['a future service date', { ...valid, serviceDate: isoDate(1) }],
+    ['an impossible service date', { ...valid, serviceDate: '2026-02-30' }],
+    ['a malformed service date', { ...valid, serviceDate: '14/03/2026' }],
+    ['a missing service date', { serviceType: 'GENERAL_SERVICE' }],
+    ['an unknown service type', { ...valid, serviceType: 'WRAP' }],
+    ['a negative labour cost', { ...valid, labourCost: -1 }],
+    ['a negative parts cost', { ...valid, partsCost: '-5' }],
+    ['a cost above the cap', { ...valid, otherCost: MAX_COST + 1 }],
+    ['a negative odometer', { ...valid, odometerKm: -10 }],
+    ['an odometer above the cap', { ...valid, odometerKm: MAX_ODOMETER_KM + 1 }],
+    ['more parts than allowed', {
+      ...valid,
+      partsReplaced: Array.from({ length: MAX_PARTS_PER_RECORD + 1 }, (_unused, index) => ({
+        name: `part ${index}`,
+      })),
+    }],
+    ['a part without a name', { ...valid, partsReplaced: [{ quantity: 1 }] }],
+  ])('rejects %s', (_label, input) => {
+    expect(createServiceRecordSchema.safeParse(input).success).toBe(false);
+  });
+
+  it('accepts today as a service date', () => {
+    expect(createServiceRecordSchema.safeParse({ ...valid, serviceDate: isoDate(0) }).success).toBe(
+      true,
+    );
+  });
+});
+
+describe('updateServiceRecordSchema', () => {
+  it('accepts a single changed field', () => {
+    expect(updateServiceRecordSchema.safeParse({ notes: 'Rechecked after the trip' }).success).toBe(
+      true,
+    );
+  });
+
+  it('rejects an empty body and a body of blanks', () => {
+    expect(updateServiceRecordSchema.safeParse({}).success).toBe(false);
+    expect(updateServiceRecordSchema.safeParse({ workshopName: '' }).success).toBe(false);
+  });
+
+  it('accepts an explicit null to clear a field', () => {
+    const parsed = updateServiceRecordSchema.parse({ odometerKm: null });
+    expect(parsed.odometerKm).toBeNull();
+  });
+
+  it('still validates the values it does receive', () => {
+    expect(updateServiceRecordSchema.safeParse({ serviceType: 'WRAP' }).success).toBe(false);
+  });
+});
+
+describe('serviceRecordQuerySchema', () => {
+  it('applies pagination defaults', () => {
+    expect(serviceRecordQuerySchema.parse({})).toEqual({
+      page: 1,
+      pageSize: DEFAULT_PAGE_SIZE,
+      from: undefined,
+      to: undefined,
+      serviceType: undefined,
+    });
+  });
+
+  it('coerces query strings and keeps filters', () => {
+    const parsed = serviceRecordQuerySchema.parse({
+      page: '3',
+      pageSize: '50',
+      from: '2026-01-01',
+      to: '2026-03-31',
+      serviceType: 'OIL_CHANGE',
+    });
+    expect(parsed.page).toBe(3);
+    expect(parsed.pageSize).toBe(50);
+    expect(parsed.serviceType).toBe('OIL_CHANGE');
+  });
+
+  it.each([
+    ['page 0', { page: '0' }],
+    ['a non-numeric page', { page: 'abc' }],
+    ['pageSize above the cap', { pageSize: MAX_PAGE_SIZE + 1 }],
+    ['an impossible from date', { from: '2026-02-30' }],
+    ['from after to', { from: '2026-03-31', to: '2026-01-01' }],
+    ['an unknown service type', { serviceType: 'WRAP' }],
+  ])('rejects %s', (_label, input) => {
+    expect(serviceRecordQuerySchema.safeParse(input).success).toBe(false);
+  });
+});
+
+describe('createMaintenanceReminderSchema', () => {
+  it('accepts a date-only due condition', () => {
+    const parsed = createMaintenanceReminderSchema.parse({
+      title: 'Oil change',
+      dueDate: '2026-12-01',
+    });
+    expect(parsed.intervalMonths).toBeUndefined();
+  });
+
+  it('accepts an odometer-only due condition', () => {
+    expect(
+      createMaintenanceReminderSchema.safeParse({ title: 'Tyre rotation', dueOdometerKm: 55_000 })
+        .success,
+    ).toBe(true);
+  });
+
+  it('rejects a reminder with no due condition at all', () => {
+    const result = createMaintenanceReminderSchema.safeParse({
+      title: 'Oil change',
+      intervalMonths: 6,
+    });
+    expect(result.success).toBe(false);
+    if (!result.success) {
+      expect(result.error.message).toContain(REMINDER_DUE_CONDITION_MESSAGE);
+    }
+  });
+
+  it.each([
+    ['a blank title', { title: '', dueDate: '2026-12-01' }],
+    ['a title above 120 chars', { title: 'x'.repeat(121), dueDate: '2026-12-01' }],
+    ['a malformed due date', { title: 'T', dueDate: '2026-13-01' }],
+    ['a zero-month interval', { title: 'T', dueDate: '2026-12-01', intervalMonths: 0 }],
+    ['a fractional interval', { title: 'T', dueDate: '2026-12-01', intervalMonths: 1.5 }],
+    ['an interval above the cap', {
+      title: 'T',
+      dueDate: '2026-12-01',
+      intervalMonths: MAX_INTERVAL_MONTHS + 1,
+    }],
+    ['a zero-kilometre interval', { title: 'T', dueDate: '2026-12-01', intervalKm: 0 }],
+    ['a negative due odometer', { title: 'T', dueOdometerKm: -1 }],
+  ])('rejects %s', (_label, input) => {
+    expect(createMaintenanceReminderSchema.safeParse(input).success).toBe(false);
+  });
+
+  it('treats blank optionals as unset', () => {
+    const parsed = createMaintenanceReminderSchema.parse({
+      title: 'Brake fluid',
+      dueDate: '2026-12-01',
+      description: '',
+      intervalMonths: '',
+      intervalKm: '',
+      dueOdometerKm: '',
+    });
+    expect(parsed.description).toBeUndefined();
+    expect(parsed.intervalMonths).toBeUndefined();
+    expect(parsed.intervalKm).toBeUndefined();
+    expect(parsed.dueOdometerKm).toBeUndefined();
+  });
+});
+
+describe('updateMaintenanceReminderSchema', () => {
+  it('accepts a partial change and rejects an empty body', () => {
+    expect(updateMaintenanceReminderSchema.safeParse({ dueOdometerKm: 60_000 }).success).toBe(true);
+    expect(updateMaintenanceReminderSchema.safeParse({}).success).toBe(false);
+  });
+
+  it('leaves the due condition to the service because only a subset is sent', () => {
+    expect(updateMaintenanceReminderSchema.safeParse({ dueDate: null }).success).toBe(true);
+  });
+});
+
+describe('completeMaintenanceReminderSchema', () => {
+  it('requires both a date and an odometer reading', () => {
+    expect(
+      completeMaintenanceReminderSchema.safeParse({
+        completionDate: '2026-11-04',
+        completionOdometerKm: 48_210,
+      }).success,
+    ).toBe(true);
+  });
+
+  it.each([
+    ['a missing odometer', { completionDate: '2026-11-04' }],
+    ['a blank odometer', { completionDate: '2026-11-04', completionOdometerKm: '' }],
+    ['a future date', { completionDate: isoDate(2), completionOdometerKm: 10 }],
+    ['a negative reading', { completionDate: '2026-11-04', completionOdometerKm: -5 }],
+  ])('rejects %s', (_label, input) => {
+    expect(completeMaintenanceReminderSchema.safeParse(input).success).toBe(false);
+  });
+});
+
+describe('maintenanceReminderQuerySchema', () => {
+  it('defaults to the first page and no filters', () => {
+    expect(maintenanceReminderQuerySchema.parse({})).toEqual({
+      page: 1,
+      pageSize: DEFAULT_PAGE_SIZE,
+      status: undefined,
+      due: undefined,
+    });
+  });
+
+  it('accepts either case because browsers and devices differ', () => {
+    expect(maintenanceReminderQuerySchema.parse({ status: 'active' }).status).toBe('ACTIVE');
+    expect(maintenanceReminderQuerySchema.parse({ due: 'OVERDUE' }).due).toBe('OVERDUE');
+  });
+
+  it('rejects unknown filter values', () => {
+    expect(maintenanceReminderQuerySchema.safeParse({ status: 'ARCHIVED' }).success).toBe(false);
+    expect(maintenanceReminderQuerySchema.safeParse({ due: 'LATER' }).success).toBe(false);
+  });
+});
+
+describe('record and reminder id schemas', () => {
+  it('only accept UUIDs', () => {
+    const uuid = '3f2b6c1a-9d4e-4a7b-8c1f-0a2b5d6e7f80';
+    expect(serviceRecordIdSchema.parse(uuid)).toBe(uuid);
+    expect(maintenanceReminderIdSchema.parse(uuid)).toBe(uuid);
+    expect(serviceRecordIdSchema.safeParse('../etc/passwd').success).toBe(false);
+    expect(maintenanceReminderIdSchema.safeParse('1').success).toBe(false);
   });
 });

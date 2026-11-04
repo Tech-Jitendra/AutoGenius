@@ -174,6 +174,12 @@ export class VehiclesController {
   @ValidationFailed('id is not a UUID.')
   @UnauthorizedAccess
   @VehicleNotFound
+  @ApiResponse({
+    status: 409,
+    description:
+      'The vehicle still has service records or maintenance reminders. The counts are in the message and nothing is deleted — history is never removed as a side effect.',
+    type: ErrorResponseDto,
+  })
   async remove(
     @CurrentUser() user: CurrentUserPayload,
     @Param('id', new ZodValidationPipe(vehicleIdSchema)) id: string,

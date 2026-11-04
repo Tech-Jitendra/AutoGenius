@@ -9,6 +9,7 @@ import { DataSource } from 'typeorm';
 import type { Vehicle } from '@autogenius/types';
 import type { CreateVehicleInput, UpdateVehicleInput } from '@autogenius/validation';
 import { isUniqueViolationOf } from '../common/utils/postgres-errors';
+import { lockUserRow } from '../common/utils/user-transaction';
 import { VehicleEntity } from './vehicle.entity';
 
 /** Created by the migration; a violation of it means a duplicate plate for this user. */
@@ -91,8 +92,16 @@ export class VehiclesService {
   }
 
   async remove(userId: string, id: string): Promise<void> {
-    await this.transactionForUser(userId, async (vehicles) => {
+    await this.transactionForUser(userId, async (vehicles, manager) => {
       const vehicle = await this.requireOwned(vehicles, userId, id);
+      // Service history is worth more than the row that points at it, so a
+      // vehicle with a past is never deleted as a side effect. The database
+      // refuses with ON DELETE RESTRICT as well; checking first turns that into
+      // a message the user can act on.
+      const history = await countHistory(manager, id);
+      if (history.serviceRecords > 0 || history.reminders > 0) {
+        throw new ConflictException(historyBlockMessage(history));
+      }
       await vehicles.remove(vehicle);
       if (vehicle.isDefault) await this.promoteDefault(vehicles, userId);
     });
@@ -118,12 +127,15 @@ export class VehiclesService {
    */
   private async transactionForUser<T>(
     userId: string,
-    work: (vehicles: Repository<VehicleEntity>) => Promise<T>,
+    work: (
+      vehicles: Repository<VehicleEntity>,
+      manager: EntityManager,
+    ) => Promise<T>,
   ): Promise<T> {
     try {
       return await this.dataSource.transaction(async (manager) => {
         await lockUserRow(manager, userId);
-        return work(manager.getRepository(VehicleEntity));
+        return work(manager.getRepository(VehicleEntity), manager);
       });
     } catch (error) {
       if (isUniqueViolationOf(error, REGISTRATION_INDEX)) {
@@ -163,11 +175,40 @@ export class VehiclesService {
   }
 }
 
-function lockUserRow(manager: EntityManager, userId: string): Promise<unknown> {
-  return manager.query(
-    `SELECT id FROM users WHERE id = $1 FOR UPDATE`,
-    [userId],
+interface HistoryCounts {
+  serviceRecords: number;
+  reminders: number;
+}
+
+/**
+ * Counted with raw SQL rather than by importing the service-history
+ * repositories: the vehicles module must not depend on that module, and this is
+ * the only thing it needs to know about a vehicle's past.
+ */
+async function countHistory(manager: EntityManager, vehicleId: string): Promise<HistoryCounts> {
+  const rows = await manager.query(
+    `SELECT
+       (SELECT count(*) FROM service_records WHERE vehicle_id = $1) AS "serviceRecords",
+       (SELECT count(*) FROM maintenance_reminders WHERE vehicle_id = $1) AS "reminders"`,
+    [vehicleId],
   );
+  return {
+    serviceRecords: Number(rows?.[0]?.serviceRecords ?? 0),
+    reminders: Number(rows?.[0]?.reminders ?? 0),
+  };
+}
+
+function historyBlockMessage(counts: HistoryCounts): string {
+  const listed = [
+    counts.serviceRecords > 0
+      ? `${counts.serviceRecords} service record${counts.serviceRecords === 1 ? '' : 's'}`
+      : null,
+    counts.reminders > 0
+      ? `${counts.reminders} maintenance reminder${counts.reminders === 1 ? '' : 's'}`
+      : null,
+  ].filter((entry): entry is string => entry !== null);
+
+  return `This vehicle still has ${listed.join(' and ')}. Delete those first if you really want the vehicle gone — service history is never removed as a side effect of deleting a vehicle.`;
 }
 
 export function toVehicle(vehicle: VehicleEntity): Vehicle {

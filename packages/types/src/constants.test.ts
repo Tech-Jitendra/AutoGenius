@@ -1,4 +1,12 @@
-import { EXPENSE_CATEGORIES, FUEL_TYPES, QUOTATION_ITEM_ASSESSMENTS, TRANSMISSION_TYPES } from './constants';
+import {
+  EXPENSE_CATEGORIES,
+  FUEL_TYPES,
+  MAINTENANCE_ALERT_STATUSES,
+  QUOTATION_ITEM_ASSESSMENTS,
+  REMINDER_STATUSES,
+  SERVICE_TYPES,
+  TRANSMISSION_TYPES,
+} from './constants';
 
 describe('domain constant lists', () => {
   it('contains all seven expense categories', () => {
@@ -15,5 +23,13 @@ describe('domain constant lists', () => {
   it('quotation assessments include UNKNOWN for insufficient evidence', () => {
     expect(QUOTATION_ITEM_ASSESSMENTS).toContain('UNKNOWN');
     expect(QUOTATION_ITEM_ASSESSMENTS).toContain('POTENTIALLY_OVERPRICED');
+  });
+
+  it('lists every service type and reminder state', () => {
+    expect(SERVICE_TYPES).toHaveLength(8);
+    expect(SERVICE_TYPES).toContain('GENERAL_SERVICE');
+    expect(SERVICE_TYPES).toContain('OTHER');
+    expect(REMINDER_STATUSES).toEqual(['ACTIVE', 'COMPLETED', 'DISMISSED']);
+    expect(MAINTENANCE_ALERT_STATUSES).toContain('OVERDUE');
   });
 });

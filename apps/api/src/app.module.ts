@@ -6,10 +6,11 @@ import { ConfigModule } from './config/config.module';
 import { DatabaseModule } from './database/database.module';
 import { AuthModule } from './auth/auth.module';
 import { VehiclesModule } from './vehicles/vehicles.module';
+import { ServiceHistoryModule } from './service-history/service-history.module';
 import { GlobalExceptionFilter } from './common/filters/global-exception.filter';
 
 @Module({
-  imports: [ConfigModule, DatabaseModule, AuthModule, VehiclesModule],
+  imports: [ConfigModule, DatabaseModule, AuthModule, VehiclesModule, ServiceHistoryModule],
   controllers: [AppController],
   providers: [
     AppService,

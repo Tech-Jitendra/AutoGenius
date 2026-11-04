@@ -4,10 +4,15 @@ import { ThrottlerModule } from '@nestjs/throttler';
 import { DocumentBuilder, SwaggerModule } from '@nestjs/swagger';
 import type { OpenAPIObject } from '@nestjs/swagger';
 import {
+  completeMaintenanceReminderSchema,
+  createMaintenanceReminderSchema,
+  createServiceRecordSchema,
   createVehicleSchema,
   loginSchema,
   refreshSchema,
   registerSchema,
+  updateMaintenanceReminderSchema,
+  updateServiceRecordSchema,
   updateVehicleSchema,
   type Env,
 } from '@autogenius/validation';
@@ -20,9 +25,22 @@ import { isSwaggerEnabled } from '../src/docs/openapi';
 import { VehiclesController } from '../src/vehicles/vehicles.controller';
 import { VehiclesService } from '../src/vehicles/vehicles.service';
 import {
+  MaintenanceRemindersController,
+} from '../src/service-history/maintenance-reminders.controller';
+import { MaintenanceSummaryController } from '../src/service-history/maintenance-summary.controller';
+import { ServiceRecordsController } from '../src/service-history/service-records.controller';
+import { ServiceHistoryService } from '../src/service-history/service-history.service';
+import {
   createVehicleExample,
   updateVehicleExample,
 } from '../src/docs/dto/vehicle.dto';
+import {
+  completeMaintenanceReminderExample,
+  createMaintenanceReminderExample,
+  createServiceRecordExample,
+  updateMaintenanceReminderExample,
+  updateServiceRecordExample,
+} from '../src/docs/dto/service-history.dto';
 import {
   loginInputExample,
   refreshTokenExample,
@@ -41,11 +59,19 @@ describe('OpenAPI document contract', () => {
       // The controllers keep their guards here so the scanned metadata matches
       // what the real AppModule serves; the services behind them are stubs.
       imports: [ThrottlerModule.forRoot([{ name: 'auth', ttl: 60_000, limit: 5 }])],
-      controllers: [AppController, AuthController, VehiclesController],
+      controllers: [
+        AppController,
+        AuthController,
+        VehiclesController,
+        ServiceRecordsController,
+        MaintenanceRemindersController,
+        MaintenanceSummaryController,
+      ],
       providers: [
         AppService,
         { provide: AuthService, useValue: {} },
         { provide: VehiclesService, useValue: {} },
+        { provide: ServiceHistoryService, useValue: {} },
         { provide: ENV, useValue: {} },
       ],
     }).compile();
@@ -71,17 +97,30 @@ describe('OpenAPI document contract', () => {
 
     expect(operations).toEqual([
       'DELETE /api/v1/vehicles/{id}',
+      'DELETE /api/v1/vehicles/{vehicleId}/maintenance-reminders/{reminderId}',
+      'DELETE /api/v1/vehicles/{vehicleId}/service-records/{recordId}',
       'GET /api/v1/auth/me',
       'GET /api/v1/health',
       'GET /api/v1/vehicles',
       'GET /api/v1/vehicles/{id}',
+      'GET /api/v1/vehicles/{vehicleId}/maintenance-reminders',
+      'GET /api/v1/vehicles/{vehicleId}/maintenance-reminders/{reminderId}',
+      'GET /api/v1/vehicles/{vehicleId}/maintenance-summary',
+      'GET /api/v1/vehicles/{vehicleId}/service-records',
+      'GET /api/v1/vehicles/{vehicleId}/service-records/{recordId}',
       'PATCH /api/v1/vehicles/{id}',
       'PATCH /api/v1/vehicles/{id}/default',
+      'PATCH /api/v1/vehicles/{vehicleId}/maintenance-reminders/{reminderId}',
+      'PATCH /api/v1/vehicles/{vehicleId}/maintenance-reminders/{reminderId}/complete',
+      'PATCH /api/v1/vehicles/{vehicleId}/maintenance-reminders/{reminderId}/dismiss',
+      'PATCH /api/v1/vehicles/{vehicleId}/service-records/{recordId}',
       'POST /api/v1/auth/login',
       'POST /api/v1/auth/logout',
       'POST /api/v1/auth/refresh',
       'POST /api/v1/auth/register',
       'POST /api/v1/vehicles',
+      'POST /api/v1/vehicles/{vehicleId}/maintenance-reminders',
+      'POST /api/v1/vehicles/{vehicleId}/service-records',
     ]);
   });
 
@@ -150,6 +189,114 @@ describe('OpenAPI document contract', () => {
     const update = exampleObjectFrom('UpdateVehicleInputDto');
     expect(update).toEqual(updateVehicleExample);
     expect(updateVehicleSchema.parse(update)).toEqual(update);
+  });
+
+  it('validates the documented service-record examples', () => {
+    const create = exampleObjectFrom('CreateServiceRecordInputDto');
+    expect(create).toEqual(createServiceRecordExample);
+    const parsed = createServiceRecordSchema.parse(create);
+    expect(parsed).toMatchObject({
+      serviceDate: '2026-10-21',
+      serviceType: 'GENERAL_SERVICE',
+      // Costs arrive as money and leave with at most two decimals.
+      labourCost: 900,
+      partsCost: 3650,
+    });
+    expect(parsed.partsReplaced).toHaveLength(2);
+
+    const update = exampleObjectFrom('UpdateServiceRecordInputDto');
+    expect(update).toEqual(updateServiceRecordExample);
+    expect(updateServiceRecordSchema.parse(update)).toEqual(update);
+  });
+
+  it('validates the documented reminder examples', () => {
+    const create = exampleObjectFrom('CreateMaintenanceReminderInputDto');
+    expect(create).toEqual(createMaintenanceReminderExample);
+    expect(createMaintenanceReminderSchema.parse(create)).toMatchObject({
+      title: 'Oil change',
+      intervalMonths: 12,
+      intervalKm: 10000,
+    });
+
+    const update = exampleObjectFrom('UpdateMaintenanceReminderInputDto');
+    expect(update).toEqual(updateMaintenanceReminderExample);
+    expect(updateMaintenanceReminderSchema.parse(update)).toEqual(update);
+
+    const complete = exampleObjectFrom('CompleteMaintenanceReminderInputDto');
+    expect(complete).toEqual(completeMaintenanceReminderExample);
+    expect(completeMaintenanceReminderSchema.parse(complete)).toEqual(complete);
+  });
+
+  it('requires only the fields the service-history schemas require', () => {
+    const required = (name: string) =>
+      (document.components?.schemas?.[name] as { required?: string[] }).required ?? [];
+
+    expect(required('CreateServiceRecordInputDto').sort()).toEqual([
+      'serviceDate',
+      'serviceType',
+    ]);
+    expect(required('UpdateServiceRecordInputDto')).toEqual([]);
+    expect(required('CreateMaintenanceReminderInputDto')).toEqual(['title']);
+    expect(required('UpdateMaintenanceReminderInputDto')).toEqual([]);
+    expect(required('CompleteMaintenanceReminderInputDto').sort()).toEqual([
+      'completionDate',
+      'completionOdometerKm',
+    ]);
+    expect(required('ReplacedPartInputDto')).toEqual(['name']);
+    expect(required('ReplacedPartDto').sort()).toEqual(['cost', 'name', 'quantity']);
+  });
+
+  it('keeps client-supplied totals out of the request schema', () => {
+    const create = document.components?.schemas?.['CreateServiceRecordInputDto'] as {
+      properties?: Record<string, unknown>;
+    };
+    expect(create.properties).not.toHaveProperty('totalCost');
+    expect(create.properties).not.toHaveProperty('userId');
+    expect(create.properties).not.toHaveProperty('vehicleId');
+  });
+
+  it('does not leak ownership columns into history responses', () => {
+    for (const name of ['ServiceRecordDto', 'MaintenanceReminderDto']) {
+      const schema = document.components?.schemas?.[name] as {
+        properties?: Record<string, unknown>;
+      };
+      expect(schema.properties).not.toHaveProperty('userId');
+    }
+    // The summary is a read model, so it exposes neither id columns it did not
+    // need nor any stored roll-up.
+    const summary = document.components?.schemas?.['MaintenanceSummaryDto'] as {
+      properties?: Record<string, unknown>;
+    };
+    expect(Object.keys(summary.properties ?? {}).sort()).toEqual([
+      'activeReminders',
+      'lastServiceDate',
+      'lastServiceOdometer',
+      'overdueReminders',
+      'totalExpenditure',
+      'totalServiceRecords',
+      'upcomingReminders',
+      'vehicleId',
+    ]);
+  });
+
+  it('documents the list filters as query parameters', () => {
+    const parametersOf = (path: string, method: 'get') =>
+      (document.paths[path]?.[method] as { parameters?: { name: string; in: string }[] })
+        .parameters ?? [];
+
+    expect(
+      parametersOf('/api/v1/vehicles/{vehicleId}/service-records', 'get')
+        .filter((parameter) => parameter.in === 'query')
+        .map((parameter) => parameter.name)
+        .sort(),
+    ).toEqual(['from', 'page', 'pageSize', 'serviceType', 'to']);
+
+    expect(
+      parametersOf('/api/v1/vehicles/{vehicleId}/maintenance-reminders', 'get')
+        .filter((parameter) => parameter.in === 'query')
+        .map((parameter) => parameter.name)
+        .sort(),
+    ).toEqual(['due', 'page', 'pageSize', 'status']);
   });
 
   it('requires only the fields the Zod schemas require', () => {

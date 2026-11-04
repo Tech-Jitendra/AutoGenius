@@ -67,6 +67,7 @@ interface Fakes {
     remove: jest.Mock;
   };
   lock: jest.Mock;
+  history: jest.Mock;
   transaction: jest.Mock;
 }
 
@@ -81,7 +82,15 @@ function makeFakes(): Fakes {
     remove: jest.fn().mockResolvedValue(undefined),
   };
   const lock = jest.fn().mockResolvedValue([{ id: USER_ID }]);
-  const manager = { query: lock, getRepository: () => vehicles };
+  const history = jest
+    .fn()
+    .mockResolvedValue([{ serviceRecords: '0', reminders: '0' }]);
+  // The transaction manager answers two kinds of raw SQL: the user row lock, and
+  // the service-history count that guards deletion.
+  const query = jest.fn((sql: string, params: unknown[]) =>
+    sql.includes('FOR UPDATE') ? lock(sql, params) : history(sql, params),
+  );
+  const manager = { query, getRepository: () => vehicles };
   const transaction = jest.fn(async (work: (m: unknown) => Promise<unknown>) =>
     work(manager),
   );
@@ -89,7 +98,7 @@ function makeFakes(): Fakes {
     vehicles as unknown as never,
     { transaction } as unknown as never,
   );
-  return { service, vehicles, lock, transaction };
+  return { service, vehicles, lock, history, transaction };
 }
 
 describe('VehiclesService', () => {
@@ -351,6 +360,47 @@ describe('VehiclesService', () => {
         NotFoundException,
       );
       expect(fakes.vehicles.remove).not.toHaveBeenCalled();
+    });
+
+    it('refuses to delete a vehicle that has a past', async () => {
+      fakes.vehicles.findOne.mockResolvedValue(makeVehicle());
+      fakes.history.mockResolvedValue([{ serviceRecords: '2', reminders: '1' }]);
+
+      await expect(fakes.service.remove(USER_ID, VEHICLE_ID)).rejects.toThrow(
+        'This vehicle still has 2 service records and 1 maintenance reminder. Delete those first if you really want the vehicle gone — service history is never removed as a side effect of deleting a vehicle.',
+      );
+      expect(fakes.vehicles.remove).not.toHaveBeenCalled();
+      expect(fakes.vehicles.update).not.toHaveBeenCalled();
+    });
+
+    it('refuses on reminders alone', async () => {
+      fakes.vehicles.findOne.mockResolvedValue(makeVehicle());
+      fakes.history.mockResolvedValue([{ serviceRecords: '0', reminders: '1' }]);
+
+      await expect(fakes.service.remove(USER_ID, VEHICLE_ID)).rejects.toBeInstanceOf(
+        ConflictException,
+      );
+      expect(fakes.vehicles.remove).not.toHaveBeenCalled();
+    });
+
+    it('counts the history inside the user lock, so it cannot change mid-check', async () => {
+      fakes.vehicles.findOne.mockResolvedValue(makeVehicle());
+
+      await fakes.service.remove(USER_ID, VEHICLE_ID);
+
+      expect(fakes.history).toHaveBeenCalledWith(expect.stringContaining('service_records'), [
+        VEHICLE_ID,
+      ]);
+      const lockOrder = fakes.lock.mock.invocationCallOrder[0] ?? 0;
+      const countOrder = fakes.history.mock.invocationCallOrder[0] ?? 0;
+      const deleteOrder = fakes.vehicles.remove.mock.invocationCallOrder[0] ?? 0;
+      expect(lockOrder).toBeLessThan(countOrder);
+      expect(countOrder).toBeLessThan(deleteOrder);
+    });
+
+    it('keeps the old behaviour for a vehicle with no history', async () => {
+      fakes.vehicles.findOne.mockResolvedValue(makeVehicle({ isDefault: false }));
+      await expect(fakes.service.remove(USER_ID, VEHICLE_ID)).resolves.toBeUndefined();
     });
   });
 

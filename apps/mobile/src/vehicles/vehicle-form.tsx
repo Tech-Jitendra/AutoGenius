@@ -236,7 +236,7 @@ export function VehicleForm({
   );
 }
 
-function Field({
+export function Field({
   label,
   error,
   children,
@@ -254,16 +254,22 @@ function Field({
   );
 }
 
-function Choices({
+/**
+ * `formatOption` exists because not every enum reads the same way: fuel types
+ * want "Petrol", while service types want "Oil Change" with both words kept.
+ */
+export function Choices({
   options,
   value,
   onChange,
   label,
+  formatOption = titleCase,
 }: {
   options: readonly string[];
   value: string;
   onChange: (choice: string) => void;
   label: string;
+  formatOption?: (option: string) => string;
 }) {
   return (
     <View style={styles.choices}>
@@ -283,7 +289,7 @@ function Choices({
             accessibilityState={{ selected }}
           >
             <Text style={[styles.choiceText, selected && styles.choiceTextSelected]}>
-              {titleCase(option)}
+              {formatOption(option)}
             </Text>
           </Pressable>
         );
