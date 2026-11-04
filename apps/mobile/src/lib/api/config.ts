@@ -2,7 +2,7 @@ import { Platform } from 'react-native';
 
 function defaultBaseUrl(): string {
   // 10.0.2.2 reaches the host machine from the Android emulator.
-  if (Platform.OS === 'android') return 'http://10.0.2.2:3001';
+  // if (Platform.OS === 'android') return 'http://10.0.2.2:3001';
   return 'http://localhost:3001';
 }
 
