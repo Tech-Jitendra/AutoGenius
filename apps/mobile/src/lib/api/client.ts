@@ -44,6 +44,13 @@ function errorMessage(body: unknown, fallback: string): string {
   return fallback;
 }
 
+function fallbackMessage(status: number): string {
+  if (status === 429) {
+    return 'Too many attempts. Please wait a moment before trying again.';
+  }
+  return `Request failed (${status})`;
+}
+
 async function parseError(res: Response): Promise<ApiError> {
   let body: unknown = null;
   try {
@@ -51,11 +58,20 @@ async function parseError(res: Response): Promise<ApiError> {
   } catch {
     // Keep the fallback message when the body is not JSON.
   }
-  return new ApiError(res.status, errorMessage(body, `Request failed (${res.status})`));
+  return new ApiError(res.status, errorMessage(body, fallbackMessage(res.status)));
 }
 
 async function rawFetch(path: string, init: RequestInit): Promise<Response> {
-  return fetch(`${API_BASE_URL}/api/v1${path}`, init);
+  try {
+    return await fetch(`${API_BASE_URL}/api/v1${path}`, init);
+  } catch {
+    // fetch only rejects when the request never reached the server, which is
+    // almost always an unreachable or misconfigured base URL.
+    throw new ApiError(
+      0,
+      `Cannot reach the AutoGenius API at ${API_BASE_URL}. Check that the server is running and that EXPO_PUBLIC_API_URL points at it.`,
+    );
+  }
 }
 
 async function postJson(path: string, body: unknown): Promise<Response> {
@@ -66,10 +82,16 @@ async function postJson(path: string, body: unknown): Promise<Response> {
   });
 }
 
-export async function refreshTokens(refreshToken: string): Promise<AuthTokens> {
-  const res = await postJson('/auth/refresh', { refreshToken });
+/** POST to an unauthenticated endpoint and return the parsed JSON body. */
+export async function publicPost<T>(path: string, body: unknown): Promise<T> {
+  const res = await postJson(path, body);
   if (!res.ok) throw await parseError(res);
-  return (await res.json()) as AuthTokens;
+  if (res.status === 204) return undefined as T;
+  return (await res.json()) as T;
+}
+
+export function refreshTokens(refreshToken: string): Promise<AuthTokens> {
+  return publicPost<AuthTokens>('/auth/refresh', { refreshToken });
 }
 
 async function ensureFreshTokens(): Promise<AuthTokens> {

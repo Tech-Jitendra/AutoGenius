@@ -125,6 +125,60 @@ describe('registerSchema', () => {
       }),
     ).toThrow();
   });
+
+  it('normalises the separators people type into a phone number', () => {
+    const cases: [string, string][] = [
+      ['+91 98765 43210', '+919876543210'],
+      ['98765-43210', '9876543210'],
+      ['(020) 7654 3210', '02076543210'],
+      ['  +919876543210  ', '+919876543210'],
+    ];
+    for (const [input, expected] of cases) {
+      const parsed = registerSchema.parse({
+        name: 'A',
+        email: 'a@b.com',
+        phone: input,
+        password: 'password123',
+      });
+      expect(parsed.phone).toBe(expected);
+    }
+  });
+
+  it('treats an empty phone as not provided', () => {
+    const parsed = registerSchema.parse({
+      name: 'A',
+      email: 'a@b.com',
+      phone: '',
+      password: 'password123',
+    });
+    expect(parsed.phone).toBeUndefined();
+  });
+
+  it('treats a whitespace-only phone as not provided', () => {
+    const parsed = registerSchema.parse({
+      name: 'A',
+      email: 'a@b.com',
+      phone: '   ',
+      password: 'password123',
+    });
+    expect(parsed.phone).toBeUndefined();
+  });
+
+  it('explains what a valid phone looks like', () => {
+    const result = registerSchema.safeParse({
+      name: 'A',
+      email: 'a@b.com',
+      phone: '12345',
+      password: 'password123',
+    });
+    expect(result.success).toBe(false);
+    const issue = result.success
+      ? undefined
+      : result.error.issues.find((entry) => entry.path[0] === 'phone');
+    expect(issue?.message).toBe(
+      'Phone must be 8 to 15 digits, optionally starting with +',
+    );
+  });
 });
 
 describe('loginSchema', () => {

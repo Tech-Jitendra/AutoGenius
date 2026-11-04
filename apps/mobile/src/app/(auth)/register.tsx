@@ -28,12 +28,7 @@ export default function RegisterScreen() {
 
   const onSubmit = async () => {
     setFormError(null);
-    const input = {
-      name,
-      email,
-      phone: phone.trim() === '' ? undefined : phone.trim(),
-      password,
-    };
+    const input = { name, email, phone, password };
     const result = validateForm(registerSchema, input);
     if (!result.success) {
       setFieldErrors(result.errors);

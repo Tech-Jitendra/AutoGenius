@@ -19,6 +19,10 @@ export const envSchema = z.object({
   RATE_LIMIT_AUTH_MAX: z.coerce.number().int().positive().default(5),
   RATE_LIMIT_REFRESH_MAX: z.coerce.number().int().positive().default(10),
   AI_SERVICE_URL: z.string().url().default('http://localhost:8000'),
+  // Tri-state on purpose: unset means "serve the docs everywhere except
+  // production", so a local `false` from a copied .env cannot silently hide
+  // Swagger. Only an explicit value overrides the NODE_ENV default.
+  SWAGGER_ENABLED: z.enum(['true', 'false']).optional(),
   // Optional until the AI tasks: an unset key must not block the rest of the
   // stack, but a present value is still validated.
   QWEN_API_KEY: z.preprocess(emptyToUndefined, z.string().optional()),
@@ -37,10 +41,27 @@ export function normalizeEmail(email: string): string {
 
 const phoneRegex = /^\+?[0-9]{8,15}$/;
 
+/**
+ * Users type separators freely ("+91 98765 43210", "012-3456789"), so the
+ * separators are stripped before the rule runs and the stored value is always
+ * the canonical digit string.
+ */
+export const phoneSchema = z.preprocess(
+  (value) =>
+    typeof value === 'string' && value.trim() === '' ? undefined : value,
+  z
+    .string()
+    .transform((value) => value.trim().replace(/[\s().-]/g, ''))
+    .refine((value) => phoneRegex.test(value), {
+      message: 'Phone must be 8 to 15 digits, optionally starting with +',
+    })
+    .optional(),
+);
+
 export const registerSchema = z.object({
   name: z.string().min(1).max(100),
   email: z.string().trim().email().max(255),
-  phone: z.string().regex(phoneRegex).optional(),
+  phone: phoneSchema,
   password: z.string().min(8).max(72),
 });
 

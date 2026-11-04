@@ -119,6 +119,38 @@ describe('Auth against real PostgreSQL', () => {
     expect(JSON.stringify(res.body)).not.toContain('passwordHash');
   });
 
+  it('stores a phone typed with separators in canonical form', async () => {
+    // The mobile form submits exactly what the user typed, so the API — not the
+    // device — is responsible for the stored format.
+    const res = await register('phone', { phone: '+91 (98765) 43210' });
+    expect(res.status).toBe(201);
+    expect(res.body.user.phone).toBe('+919876543210');
+
+    const rows = await dataSource.query(
+      `SELECT phone FROM users WHERE id = $1`,
+      [res.body.user.id],
+    );
+    expect(rows[0].phone).toBe('+919876543210');
+  });
+
+  it('stores a null phone when the field is left blank', async () => {
+    const res = await register('no-phone', { phone: '' });
+    expect(res.status).toBe(201);
+    expect(res.body.user.phone).toBeNull();
+
+    const rows = await dataSource.query(
+      `SELECT phone FROM users WHERE id = $1`,
+      [res.body.user.id],
+    );
+    expect(rows[0].phone).toBeNull();
+  });
+
+  it('rejects an unparseable phone with 400 and a field-scoped message', async () => {
+    const res = await register('bad-phone', { phone: 'abcdefgh' });
+    expect(res.status).toBe(400);
+    expect(res.body.message).toContain('phone:');
+  });
+
   it('rejects a duplicate email with 409', async () => {
     await register('dup');
     const res = await register('dup', { name: 'Someone Else' });
