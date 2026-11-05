@@ -81,12 +81,13 @@ export default function MaintenanceScreen() {
     setNotice(null);
     setCompletionErrors({});
     setCompletionDate(todayIsoDate());
+    // The API rejects a reading below the last one it has seen, so the box
+    // starts at the highest figure AutoGenius already knows for this car.
+    const knownReadings = [vehicle?.currentOdometer, reminder.lastCompletedOdometerKm].filter(
+      (reading): reading is number => typeof reading === 'number',
+    );
     setCompletionOdometer(
-      reminder.lastCompletedOdometerKm !== null
-        ? String(reminder.lastCompletedOdometerKm)
-        : vehicle?.currentOdometer === null || vehicle?.currentOdometer === undefined
-          ? ''
-          : String(vehicle.currentOdometer),
+      knownReadings.length === 0 ? '' : String(Math.max(...knownReadings)),
     );
     setPanel({ reminderId: reminder.id, mode });
   };

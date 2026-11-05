@@ -177,8 +177,13 @@ const pastCalendarDateSchema = calendarDateSchema.refine(
   'Service date cannot be in the future',
 );
 
+/**
+ * `z.coerce` turns a blank or unparseable reading into NaN, which zod would
+ * report as "Expected number, received nan". That wording is useless to someone
+ * who just left the box empty, so the type error speaks plainly instead.
+ */
 const wholeOdometerSchema = z.coerce
-  .number()
+  .number({ invalid_type_error: 'Enter the odometer reading in whole kilometres' })
   .int('Odometer must be a whole number of kilometres')
   .min(0, 'Odometer cannot be negative')
   .max(MAX_ODOMETER_KM, `Odometer cannot exceed ${MAX_ODOMETER_KM} km`);

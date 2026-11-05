@@ -117,14 +117,38 @@ async function renderScreen() {
     );
   });
 
+  mounted.push(tree);
+  clients.push(queryClient);
+  await flush();
+
+  return tree;
+}
+
+/**
+ * TanStack Query notifies on a timer and a mutation invalidates the list, so
+ * renders land after the awaited call. Everything is flushed inside `act` so no
+ * update escapes into a Jest environment that has already been torn down.
+ */
+async function flush(): Promise<void> {
   for (let tick = 0; tick < 5; tick += 1) {
     await act(async () => {
       await new Promise((resolve) => setTimeout(resolve, 0));
     });
   }
-
-  return tree;
 }
+
+const mounted: { unmount: () => void }[] = [];
+const clients: QueryClient[] = [];
+
+afterEach(async () => {
+  // Unmounting drops the query observers, then clearing the cache cancels the
+  // refetches a mutation invalidation left in flight.
+  await act(async () => {
+    while (mounted.length > 0) mounted.pop()?.unmount();
+  });
+  while (clients.length > 0) clients.pop()?.clear();
+  await flush();
+});
 
 async function press(tree: ReturnType<typeof create>, label: string) {
   const button = tree.root.findAllByProps({ accessibilityLabel: label })[0];
@@ -132,6 +156,7 @@ async function press(tree: ReturnType<typeof create>, label: string) {
   await act(async () => {
     button.props.onPress();
   });
+  await flush();
   return tree;
 }
 
@@ -147,6 +172,7 @@ async function typeInto(tree: ReturnType<typeof create>, label: string, text: st
   await act(async () => {
     input.props.onChangeText(text);
   });
+  await flush();
 }
 
 describe('maintenance screen', () => {
@@ -211,7 +237,7 @@ describe('maintenance screen', () => {
     await typeInto(tree, 'Completion odometer', '');
     await press(tree, 'Confirm completion');
 
-    expect(textOf(tree)).toContain('Required');
+    expect(textOf(tree)).toContain('Enter the odometer reading in whole kilometres');
     expect(mockComplete).not.toHaveBeenCalled();
   });
 
@@ -258,13 +284,22 @@ describe('maintenance screen', () => {
   });
 
   it('walks the pages as the list reaches its end', async () => {
-    mockListReminders.mockResolvedValue({
-      items: [overdue],
-      page: 1,
-      pageSize: 20,
-      totalItems: 25,
-      totalPages: 2,
-    });
+    const paged = { ...overdue, id: 'm4', title: 'Timing belt' };
+    mockListReminders
+      .mockResolvedValueOnce({
+        items: [overdue],
+        page: 1,
+        pageSize: 20,
+        totalItems: 25,
+        totalPages: 2,
+      })
+      .mockResolvedValueOnce({
+        items: [paged],
+        page: 2,
+        pageSize: 20,
+        totalItems: 25,
+        totalPages: 2,
+      });
     const tree = await renderScreen();
     const list = tree.root.findByType(SectionList);
 

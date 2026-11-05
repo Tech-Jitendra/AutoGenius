@@ -84,6 +84,11 @@ function bodyOf(init: RequestInit): unknown {
   return JSON.parse(String(init.body));
 }
 
+/** The client prefixes the configured API origin; these assertions are about the path. */
+function pathOf(url: string): string {
+  return url.replace(/^https?:\/\/[^/]+/, '');
+}
+
 describe('service history api', () => {
   beforeEach(() => {
     resetApiClientForTests();
@@ -108,7 +113,7 @@ describe('service history api', () => {
     await expect(listServiceRecords(VEHICLE, { page: 2 })).resolves.toEqual(page([record]));
 
     const [url, init] = lastCall();
-    expect(url).toBe(`/api/v1/vehicles/${VEHICLE}/service-records?page=2`);
+    expect(pathOf(url)).toBe(`/api/v1/vehicles/${VEHICLE}/service-records?page=2`);
     expect(init.method ?? 'GET').toBe('GET');
     expect((init.headers as Record<string, string>)['Authorization']).toBe('Bearer access');
   });
@@ -143,7 +148,7 @@ describe('service history api', () => {
     await createServiceRecord(VEHICLE, input);
 
     const [url, init] = lastCall();
-    expect(url).toBe(`/api/v1/vehicles/${VEHICLE}/service-records`);
+    expect(pathOf(url)).toBe(`/api/v1/vehicles/${VEHICLE}/service-records`);
     expect(init.method).toBe('POST');
     expect(bodyOf(init)).toEqual(input);
     // The client never sends a total: the API derives it and a CHECK enforces it.
@@ -151,13 +156,14 @@ describe('service history api', () => {
   });
 
   it('reads, patches and deletes one record under its vehicle', async () => {
-    fetchMock.mockResolvedValue(jsonResponse(record));
+    // A Response body can only be read once, so every call gets a fresh one.
+    fetchMock.mockImplementation(() => Promise.resolve(jsonResponse(record)));
     await expect(getServiceRecord(VEHICLE, RECORD)).resolves.toEqual(record);
-    expect(lastCall()[0]).toBe(`/api/v1/vehicles/${VEHICLE}/service-records/${RECORD}`);
+    expect(pathOf(lastCall()[0])).toBe(`/api/v1/vehicles/${VEHICLE}/service-records/${RECORD}`);
 
     await updateServiceRecord(VEHICLE, RECORD, { workshopName: null });
     const [patchUrl, patchInit] = lastCall();
-    expect(patchUrl).toBe(`/api/v1/vehicles/${VEHICLE}/service-records/${RECORD}`);
+    expect(pathOf(patchUrl)).toBe(`/api/v1/vehicles/${VEHICLE}/service-records/${RECORD}`);
     expect(patchInit.method).toBe('PATCH');
     expect(bodyOf(patchInit)).toEqual({ workshopName: null });
 
@@ -171,7 +177,7 @@ describe('service history api', () => {
 
     await listMaintenanceReminders(VEHICLE, { page: 1, status: 'ACTIVE', due: 'OVERDUE' });
 
-    expect(lastCall()[0]).toBe(
+    expect(pathOf(lastCall()[0])).toBe(
       `/api/v1/vehicles/${VEHICLE}/maintenance-reminders?page=1&status=ACTIVE&due=OVERDUE`,
     );
   });
@@ -183,7 +189,7 @@ describe('service history api', () => {
     await createMaintenanceReminder(VEHICLE, input);
 
     const [url, init] = lastCall();
-    expect(url).toBe(`/api/v1/vehicles/${VEHICLE}/maintenance-reminders`);
+    expect(pathOf(url)).toBe(`/api/v1/vehicles/${VEHICLE}/maintenance-reminders`);
     expect(init.method).toBe('POST');
     expect(bodyOf(init)).toEqual(input);
   });
@@ -198,7 +204,7 @@ describe('service history api', () => {
     });
 
     const [url, init] = lastCall();
-    expect(url).toBe(`/api/v1/vehicles/${VEHICLE}/maintenance-reminders/${REMINDER}`);
+    expect(pathOf(url)).toBe(`/api/v1/vehicles/${VEHICLE}/maintenance-reminders/${REMINDER}`);
     expect(init.method).toBe('PATCH');
     expect(bodyOf(init)).toEqual({ title: 'Align wheels' });
   });
@@ -213,7 +219,7 @@ describe('service history api', () => {
     });
 
     const [url, init] = lastCall();
-    expect(url).toBe(
+    expect(pathOf(url)).toBe(
       `/api/v1/vehicles/${VEHICLE}/maintenance-reminders/${REMINDER}/complete`,
     );
     expect(init.method).toBe('PATCH');
@@ -224,7 +230,7 @@ describe('service history api', () => {
     fetchMock.mockResolvedValueOnce(jsonResponse({ ...reminder, status: 'DISMISSED' }));
     await dismissMaintenanceReminder(VEHICLE, REMINDER);
     const [dismissUrl, dismissInit] = lastCall();
-    expect(dismissUrl).toBe(
+    expect(pathOf(dismissUrl)).toBe(
       `/api/v1/vehicles/${VEHICLE}/maintenance-reminders/${REMINDER}/dismiss`,
     );
     expect(dismissInit.method).toBe('PATCH');
@@ -251,7 +257,7 @@ describe('service history api', () => {
 
     await getMaintenanceSummary(VEHICLE);
 
-    expect(lastCall()[0]).toBe(`/api/v1/vehicles/${VEHICLE}/maintenance-summary`);
+    expect(pathOf(lastCall()[0])).toBe(`/api/v1/vehicles/${VEHICLE}/maintenance-summary`);
   });
 
   it('url-encodes ids so a crafted id cannot escape the path', async () => {

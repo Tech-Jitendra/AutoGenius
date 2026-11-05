@@ -4,10 +4,12 @@
 > "Your AI second opinion before you spend money on your car."
 
 AI-powered vehicle ownership assistant for Indian vehicle owners.
-This repository currently contains the **V1 foundation** (Task 01) and
-**authentication** (Task 02: register/login/refresh/logout/me on the API, plus
-the mobile login, register and signed-in screens). Vehicle, expense,
-maintenance, AI assistant and quotation features come in Tasks 03-07.
+This repository currently contains the **V1 foundation** (Task 01),
+**authentication** (Task 02), **vehicles** (Task 03) and **service history &
+maintenance reminders** (Task 04): service records with parts and costs,
+maintenance reminders with due dates and odometer intervals, completion that
+rolls recurrence forward, and the mobile screens for all of it. Expense
+tracking, the AI assistant and quotation analysis come in Tasks 05–07.
 
 ## Repository structure
 
@@ -114,9 +116,10 @@ With the API running:
 | OpenAPI 3.0 JSON | <http://localhost:3001/api/docs-json> |
 
 Both sit outside the `/api/v1` prefix on purpose: they describe the API instead
-of being another API resource. Every Auth and Vehicles endpoint is documented
-with its request body, validation rules, examples, success and error statuses,
-and whether it needs a bearer token.
+of being another API resource. Every Auth, Vehicles, service-records,
+maintenance-reminders and maintenance-summary endpoint is documented with its
+request body, validation rules, examples, success and error statuses, and
+whether it needs a bearer token.
 
 To exercise the protected endpoints: call `POST /auth/register` (or
 `/auth/login`) from the UI, copy `accessToken` from the response, paste it into
@@ -148,6 +151,22 @@ in `apps/mobile/package.json`, the `expo-router` plugin in
 makes Expo fall back to the legacy `expo/AppEntry.js` entry, which imports a
 non-existent root `App` component and fails with
 `Unable to resolve "../../App"`. There is intentionally no `App.tsx`.
+
+#### Screens that exist today
+
+Signed-out (`src/app/(auth)/`): `/login`, `/register`. Signed-in
+(`src/app/(app)/`): `/` (vehicle list), `/vehicles/add`,
+`/vehicles/[id]` and its `/edit` and `/delete`, plus the Task 04 upkeep screens
+under the same group: `/vehicles/[id]/service-history`, `/service-history/add`,
+`/service-history/[recordId]/edit`, `/vehicles/[id]/maintenance`,
+`/maintenance/add`, `/maintenance/[reminderId]/edit`. The route guard keys off
+the first segment, so a new signed-in screen must live under `(app)` — the
+folder is what keeps it behind authentication.
+
+Vehicle details opens both: the upkeep card (last service, total spent on
+upkeep, overdue and upcoming counts, the next thing due) links to the service
+history list and the maintenance list, and reads from the same TanStack Query
+caches those screens use, so it costs no extra request.
 
 #### Which API URL the app uses
 
@@ -240,7 +259,10 @@ Migrations live in `apps/api/src/database/migrations/`:
 `email` and `lower(email)` unique constraints; `1793664000000-CreateVehicles.ts` creates
 `vehicles` with its CHECK constraints and partial unique indexes;
 `1793750400000-NormalizeVehicleRegistrationUniqueness.ts` re-keys the per-owner plate
-index so separator formatting cannot smuggle in a duplicate. The API applies pending
+index so separator formatting cannot smuggle in a duplicate; and
+`1793836800000-CreateServiceHistory.ts` adds `UNIQUE (id, user_id)` to `vehicles` so history
+rows can reference vehicle-and-owner as one key, then creates `service_records` and
+`maintenance_reminders` with their CHECK constraints and indexes. The API applies pending
 migrations automatically on boot (`migrationsRun: true`, `synchronize: false`). To run
 them by hand:
 
@@ -262,16 +284,17 @@ cd apps/ai-service && pytest
 
 The API's unit suites run against `pg-mem`, which cannot reproduce real
 PostgreSQL behaviour (row locking, `lower(email)` indexes, SQLSTATE codes).
-`apps/api/test/*.postgres.spec.ts` therefore runs the same auth and vehicle flows against
-a **live PostgreSQL** server using the root `.env` connection:
+`apps/api/test/*.postgres.spec.ts` therefore runs the same auth, vehicle and
+service-history flows against a **live PostgreSQL** server using the root `.env` connection:
 
 ```bash
 npm run api:test:postgres    # requires PostgreSQL running with migrations applied
 ```
 
-They create users under `pg-e2e-<run-id>@example.com` / `pg-veh-<run-id>@example.com` and
-delete exactly those rows afterwards. They are excluded from `npm run test` so CI without a
-database still passes.
+They create users under `pg-e2e-<run-id>@example.com`, `pg-veh-<run-id>@example.com` and
+`pg-hist-<run-id>@example.com`, and delete exactly those rows afterwards — never a truncate,
+never a schema reset, and never anything belonging to a real account. They are excluded
+from `npm run test` so CI without a database still passes.
 
 ## Lint, typecheck, build
 

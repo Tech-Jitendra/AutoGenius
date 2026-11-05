@@ -86,7 +86,9 @@ export default function ServiceHistoryScreen() {
           }
           onEndReached={() => void fetchNextPage()}
           onEndReachedThreshold={0.4}
-          ListHeaderComponent={<Text style={styles.count}>{totalItems} records, newest first</Text>}
+          ListHeaderComponent={
+            <Text style={styles.count}>{`${totalItems} records, newest first`}</Text>
+          }
           ListFooterComponent={
             isFetchingNextPage ? (
               <Text style={styles.muted}>Loading older records…</Text>

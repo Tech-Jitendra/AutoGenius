@@ -1,8 +1,8 @@
 # AutoGenius — API Design
 
 Base URL: `/api/v1` · All bodies are JSON · Auth via `Authorization: Bearer <accessToken>`
-Modules through Vehicles (Tasks 01–03) are implemented; the sections after them are the V1
-contract and are built in Tasks 04–07.
+Modules through Service History (Tasks 01–04) are implemented; the sections after them are
+the V1 contract and are built in Tasks 05–07.
 
 ## Interactive documentation
 
@@ -86,6 +86,126 @@ Conventions:
   unique index at the database level). Deleting the default promotes another owned vehicle if
   one exists. `PATCH /:id/default` on the vehicle that is already default is a no-op `200`.
 - `GET /vehicles` returns the default first, then newest first. No pagination in V1.
+- `DELETE /vehicles/:id` **refuses to take history with it**. If the vehicle has service
+  records or reminders the answer is `409` naming both counts
+  ("This vehicle still has 3 service records and 1 maintenance reminder. Delete those
+  first…"); the foreign keys are `RESTRICT`, so the database enforces the same rule if the
+  application ever forgets to. A vehicle with no history deletes exactly as before (`204`).
+
+## Service history
+
+Every path hangs under the vehicle, so ownership is checked on the parent before the row is
+touched — another user's record and a non-existent one both answer `404`.
+
+| Method | Endpoint                                        | Description |
+| ------ | ----------------------------------------------- | ----------- |
+| POST   | /vehicles/:vehicleId/service-records            | Add a visit → `201` |
+| GET    | /vehicles/:vehicleId/service-records            | Page of visits, newest first |
+| GET    | /vehicles/:vehicleId/service-records/:recordId  | One visit |
+| PATCH  | /vehicles/:vehicleId/service-records/:recordId  | Edit a visit |
+| DELETE | /vehicles/:vehicleId/service-records/:recordId  | Delete a visit → `204` |
+
+Write fields (`POST`; `PATCH` accepts any subset, `null` clears an optional one):
+
+```json
+{
+  "serviceDate": "2026-05-12",
+  "serviceType": "GENERAL_SERVICE",
+  "odometerKm": 42000,
+  "workshopName": "City Auto Care",
+  "description": "Front brake pads replaced, rotors skimmed",
+  "partsReplaced": [{ "name": "Brake pads", "quantity": 1, "cost": 2500 }],
+  "labourCost": 800,
+  "partsCost": 1250.5,
+  "otherCost": 149.5,
+  "notes": "Paid by card"
+}
+```
+
+- `serviceDate` (real calendar date, not in the future) and `serviceType` are required;
+  `serviceType` ∈ `OIL_CHANGE|BRAKE_INSPECTION|TYRE_REPLACEMENT|BATTERY|AIR_FILTER|COOLANT|GENERAL_SERVICE|OTHER`.
+- `odometerKm` ∈ 0…2 000 000. Costs are non-negative, at most `10 000 000` each, and are
+  rounded to the two decimals the column can hold.
+- **`totalCost` is not an input.** The API stores `labour_cost + parts_cost + other_cost`
+  in whole cents and a database CHECK keeps them in agreement, so a client cannot invent a
+  total. It appears on every response.
+- `partsReplaced` is a JSON array of `{name, quantity, cost}`; at most 100 entries, name
+  required. It records what was fitted on this visit — costs still come from the three
+  billed fields.
+- List query: `page`, `pageSize` (≤ 100), `from`, `to` (service-date range, `from` may not
+  be later than `to`), `serviceType`. Ordered `service_date DESC, created_at DESC`.
+- Response shape: `{ items, page, pageSize, totalItems, totalPages }`.
+
+## Maintenance reminders
+
+| Method | Endpoint                                          | Description |
+| ------ | ------------------------------------------------- | ----------- |
+| POST   | /vehicles/:vehicleId/maintenance-reminders         | Add a reminder → `201` |
+| GET    | /vehicles/:vehicleId/maintenance-reminders         | Page, active work first |
+| GET    | /vehicles/:vehicleId/maintenance-reminders/:reminderId | One reminder |
+| PATCH  | /vehicles/:vehicleId/maintenance-reminders/:reminderId | Edit |
+| PATCH  | /vehicles/:vehicleId/maintenance-reminders/:reminderId/complete | Mark done, roll recurrence forward |
+| PATCH  | /vehicles/:vehicleId/maintenance-reminders/:reminderId/dismiss | Close without doing the work |
+| DELETE | /vehicles/:vehicleId/maintenance-reminders/:reminderId | Delete → `204` |
+| GET    | /vehicles/:vehicleId/maintenance-summary           | Upkeep snapshot for the vehicle card |
+
+Write fields: `title` (required), `description`, `dueDate`, `dueOdometerKm`,
+`intervalMonths` (1…120), `intervalKm` (1…2 000 000), `lastCompletedDate`,
+`lastCompletedOdometerKm`. **A reminder needs at least one due condition** —
+`dueDate` or `dueOdometerKm` — otherwise `400`.
+
+List query: `page`, `pageSize`, `status` (`ACTIVE|COMPLETED|DISMISSED`, case-insensitive),
+`due` (`OVERDUE|UPCOMING|SCHEDULED`). Ordering is soonest `due_date` first (rows without a
+date fall last), then `due_odometer_km`.
+
+Each reminder carries `alertStatus` — `OVERDUE`, `UPCOMING` or `SCHEDULED` — computed on
+read, never stored:
+
+- **OVERDUE** — `due_date` is strictly before today, **or** the vehicle's stored odometer
+  has reached `due_odometer_km`. Either condition alone is enough.
+- **UPCOMING** — due within the next `UPCOMING_DUE_WINDOW_DAYS` (30) days, or within
+  `UPCOMING_DUE_WINDOW_KM` (1 000) km.
+- **SCHEDULED** — anything else. `COMPLETED` and `DISMISSED` rows report `null`, so closed
+  work can never be shown as overdue.
+
+Dates are compared as `YYYY-MM-DD` calendar days at UTC midnight, so a phone in Kolkata and
+a server in Frankfurt agree on whether the oil change is overdue.
+
+### Completing a reminder
+
+`PATCH …/complete` takes `{ "completionDate": "2026-11-04", "completionOdometerKm": 44210 }`
+— both required, the date not in the future, and the reading not lower than the highest
+figure already stored for the vehicle (its odometer, the newest service record, or the
+reminder's own last completion), else `400` naming that floor. One transaction stamps the
+completion and, when the reminder has an interval, rolls its due values forward:
+
+- next due date = **last completion date** (or this one) + `intervalMonths`, clamped to the
+  end of a shorter month (31 Jan + 1 month = 28 Feb);
+- next due odometer = **last completion reading** (or this one) + `intervalKm`, clamped to
+  2 000 000.
+
+Measuring from the work rather than from the old promise is what keeps a long-overdue
+reminder from becoming instantly overdue again. The base is the previous completion, not
+the current date, so six-monthly service done a week late still lands six months after the
+last visit. A reminder with **no** interval keeps its due values and becomes `COMPLETED` —
+that is what makes a one-time reminder one-time. Completing an already-closed reminder is
+`409`, and reopening happens by editing it.
+
+Completing **never writes a service record**: history is only created when the user supplies
+the workshop and cost details, so no duplicate bill and no invented spend appears in the
+expenditure totals.
+
+`PATCH …/dismiss` takes no body: the reminder becomes `DISMISSED` with its due values
+untouched, so the history of what was promised survives. `DELETE` removes it entirely.
+
+### Maintenance summary
+
+`GET /vehicles/:vehicleId/maintenance-summary` returns
+`{ vehicleId, totalServiceRecords, totalExpenditure, lastServiceDate, lastServiceOdometer,
+activeReminders, overdueReminders, upcomingReminders }`. Nothing is cached in roll-up
+columns: the totals are aggregated from `service_records` and the urgency counts recomputed
+from `maintenance_reminders` on every call, so editing or deleting a record cannot leave a
+stale figure behind.
 
 ## Expenses
 
@@ -98,25 +218,6 @@ Conventions:
 
 Categories: `FUEL, SERVICE, REPAIR, INSURANCE, PUC, ACCESSORY, OTHER`.
 Aggregations (monthly/yearly/category totals) are computed on the backend.
-
-## Services (history)
-
-| Method | Endpoint                        | Description        |
-| ------ | ------------------------------- | ------------------ |
-| GET    | /vehicles/:vehicleId/services   | Service history    |
-| POST   | /vehicles/:vehicleId/services   | Add service record |
-| GET    | /services/:id                   | Record details     |
-| PATCH  | /services/:id                   | Edit record        |
-| DELETE | /services/:id                   | Delete record      |
-
-## Maintenance
-
-| Method | Endpoint                          | Description          |
-| ------ | --------------------------------- | -------------------- |
-| GET    | /vehicles/:vehicleId/maintenance  | List items (+ due soon / overdue views) |
-| POST   | /vehicles/:vehicleId/maintenance  | Add item             |
-| PATCH  | /maintenance/:id                  | Update item          |
-| DELETE | /maintenance/:id                  | Delete item          |
 
 ## AI
 
@@ -182,6 +283,8 @@ Analysis result contract:
 ## Conventions
 
 - Errors: `{ "statusCode": number, "message": string, "error": string }`.
-- Pagination: `?page=1&limit=20` → `{ "data": [], "meta": { "page", "limit", "total" } }`.
-- Date/time: ISO 8601 UTC. Money: smallest consistent unit via `numeric(10,2)`, currency INR.
+- Pagination (`?page=1&pageSize=20`, `pageSize` ≤ 100) returns
+  `{ "items": [], "page", "pageSize", "totalItems", "totalPages" }`.
+- Date/time: `date` columns travel as `YYYY-MM-DD`, timestamps as ISO 8601 UTC. Money is
+  `numeric(12,2)` in INR and is summed in whole cents, never as a float.
 - Rate-limited endpoints: auth, AI chat, quotation analyze.

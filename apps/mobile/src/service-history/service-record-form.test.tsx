@@ -216,6 +216,7 @@ describe('service record form validation', () => {
   it('submits the visit with the parts list the user added', async () => {
     const onSubmit = jest.fn();
     const tree = await renderForm({
+      initial: values(),
       submitLabel: 'Save visit',
       pending: false,
       onSubmit,

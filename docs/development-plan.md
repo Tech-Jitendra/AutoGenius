@@ -17,13 +17,31 @@
 - vehicles CRUD with ownership checks, indexes, mobile list/add/edit/details/delete
   with empty/loading/error states.
 
-### Task 04 — Expense Tracking
+### Task 04 — Service History & Maintenance Records ✅ (this deliverable)
+- `service_records` + `maintenance_reminders` in one explicit migration (no `synchronize`),
+  money in `NUMERIC(12,2)` with a CHECK that the total equals its three components, and a
+  composite `(vehicle_id, user_id)` foreign key so ownership is enforced in the database.
+- Service records: CRUD, paginated newest-first list with `from`/`to`/`serviceType` filters,
+  parts replaced as JSONB.
+- Reminders: CRUD, `status`/`due` filters, `PATCH …/complete` (date + odometer, rolls
+  recurrence forward from the previous completion in one transaction) and `PATCH …/dismiss`;
+  `GET …/maintenance-summary` aggregates on read instead of storing roll-ups.
+- Urgency computed per read: OVERDUE / UPCOMING / SCHEDULED on UTC calendar days, with the
+  30-day and 1 000-km windows from `@autogenius/constants`; closed reminders never report one.
+- Deleting a vehicle with history answers `409` instead of cascading.
+- Mobile: upkeep card on vehicle details, service history list/add/edit, maintenance list
+  grouped by urgency with complete/dismiss/edit/delete, all through TanStack Query and the
+  shared Zod schemas.
+- Swagger for every new endpoint; unit + live-PostgreSQL integration tests; mobile tests.
+- **Deferred:** invoice/receipt attachments. There is no secure object-storage provider in
+  this stack yet, and binaries do not belong in PostgreSQL — the required shape is documented
+  in `docs/architecture.md`.
+
+### Task 05 — Expense Tracking & upkeep dashboard
 - expenses CRUD + category/monthly/yearly aggregations computed on the backend,
   mobile list/add/edit + summary + basic charts.
-
-### Task 05 — Maintenance
-- maintenance_items CRUD, due-soon/overdue computation (date + odometer),
-  dashboard OVERDUE / DUE SOON / UPCOMING sections. No push notifications.
+- The `maintenance_items` dashboard from the earlier draft is covered by Task 04's reminders,
+  so this task only adds the expense side and any reporting polish.
 
 ### Task 06 — AI Assistant
 - AiProvider interface, mock provider first, Qwen integration after tests pass,

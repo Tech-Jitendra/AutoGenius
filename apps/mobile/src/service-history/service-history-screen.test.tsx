@@ -75,13 +75,41 @@ async function renderScreen() {
     );
   });
 
+  mounted.push(tree);
+  await flush();
+
+  return tree;
+}
+
+/**
+ * TanStack Query notifies on a timer, so renders land after the awaited fetch.
+ * Everything is flushed inside `act` and every tree is unmounted at the end of
+ * the test, so nothing updates a component once Jest has torn the file down.
+ */
+async function flush(): Promise<void> {
   for (let tick = 0; tick < 5; tick += 1) {
     await act(async () => {
       await new Promise((resolve) => setTimeout(resolve, 0));
     });
   }
+}
 
-  return tree;
+const mounted: ReturnType<typeof create>[] = [];
+
+afterEach(async () => {
+  await act(async () => {
+    while (mounted.length > 0) mounted.pop()?.unmount();
+  });
+  await flush();
+});
+
+async function press(tree: ReturnType<typeof create>, label: string) {
+  const control = tree.root.findAllByProps({ accessibilityLabel: label })[0];
+  if (!control) throw new Error(`No control labelled ${label}`);
+  await act(async () => {
+    control.props.onPress();
+  });
+  await flush();
 }
 
 describe('service history screen', () => {
@@ -167,7 +195,12 @@ describe('service history screen', () => {
   });
 
   it('pulls the next page when the list reaches its end', async () => {
-    mockListRecords.mockResolvedValue(page([record], { page: 1, totalPages: 3, totalItems: 41 }));
+    const older = { ...record, id: 'r0', serviceDate: '2026-02-01' };
+    mockListRecords
+      .mockResolvedValueOnce(page([record], { totalItems: 41, totalPages: 3 }))
+      .mockResolvedValueOnce(
+        page([older], { page: 2, pageSize: 20, totalItems: 41, totalPages: 3 }),
+      );
 
     const tree = await renderScreen();
     const list = tree.root.findByType(FlatList);
@@ -199,12 +232,8 @@ describe('service history screen', () => {
     mockListRecords.mockResolvedValue(page([record]));
 
     const tree = await renderScreen();
-    const buttons = tree.root.findAllByProps({ accessibilityRole: 'button' });
-    const row = buttons[buttons.length - 1];
 
-    await act(async () => {
-      row?.props.onPress();
-    });
+    await press(tree, '2026-05-12 · Oil Change · City Auto Care · 42,000 km, ₹2,200');
 
     expect(router.push).toHaveBeenCalledWith({
       pathname: '/service-history/[recordId]/edit',

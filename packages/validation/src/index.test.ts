@@ -602,6 +602,18 @@ describe('completeMaintenanceReminderSchema', () => {
   ])('rejects %s', (_label, input) => {
     expect(completeMaintenanceReminderSchema.safeParse(input).success).toBe(false);
   });
+
+  it('names the reading it wants rather than reporting a NaN', () => {
+    const result = completeMaintenanceReminderSchema.safeParse({
+      completionDate: '2026-11-04',
+      completionOdometerKm: '',
+    });
+    const issue = result.success
+      ? undefined
+      : result.error.issues.find((entry) => entry.path[0] === 'completionOdometerKm');
+
+    expect(issue?.message).toBe('Enter the odometer reading in whole kilometres');
+  });
 });
 
 describe('maintenanceReminderQuerySchema', () => {
