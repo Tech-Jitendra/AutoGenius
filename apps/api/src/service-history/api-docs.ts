@@ -62,3 +62,10 @@ export const ReminderClosedConflict = ApiResponse({
     'The reminder is already COMPLETED or DISMISSED. Completing it again would silently reopen history, so the request is refused.',
   type: ErrorResponseDto,
 });
+
+export const ReminderActiveConflict = ApiResponse({
+  status: 409,
+  description:
+    'The reminder is already ACTIVE. Reopen only moves a COMPLETED or DISMISSED reminder back into the active list, so reopening one that is already tracked is refused rather than pretending to succeed.',
+  type: ErrorResponseDto,
+});

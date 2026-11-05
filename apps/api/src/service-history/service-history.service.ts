@@ -386,6 +386,36 @@ export class ServiceHistoryService {
     });
   }
 
+  /**
+   * Reopening only flips the life cycle back to ACTIVE. Every due value, both
+   * interval and both last-completed figures stay exactly as they were — the
+   * user is asking AutoGenius to watch the original promise again, not to make
+   * a new one. Urgency is recomputed on read, so a reminder whose due date has
+   * passed in the meantime correctly comes back OVERDUE.
+   */
+  async reopenReminder(
+    userId: string,
+    vehicleId: string,
+    reminderId: string,
+  ): Promise<MaintenanceReminder> {
+    return this.writeForUser(userId, async (manager) => {
+      const vehicle = await requireVehicle(
+        manager.getRepository(VehicleEntity),
+        userId,
+        vehicleId,
+      );
+      const repo = manager.getRepository(MaintenanceReminderEntity);
+      const reminder = await loadReminderIn(repo, userId, vehicleId, reminderId);
+      if (reminder.status === 'ACTIVE') {
+        throw new ConflictException(
+          'Reminder is already active. Edit it instead of reopening it.',
+        );
+      }
+      reminder.status = 'ACTIVE';
+      return this.withAlert(await repo.save(reminder), vehicle.currentOdometer);
+    });
+  }
+
   async removeReminder(
     userId: string,
     vehicleId: string,
@@ -613,7 +643,7 @@ async function lowestAllowedOdometer(
 }
 
 function alreadyClosedMessage(status: string): string {
-  return `Reminder is already ${status.toLowerCase()}. Reopen it by editing the reminder instead.`;
+  return `Reminder is already ${status.toLowerCase()}. Reopen it with PATCH /maintenance-reminders/{reminderId}/reopen if it needs tracking again.`;
 }
 
 function page<T>(
