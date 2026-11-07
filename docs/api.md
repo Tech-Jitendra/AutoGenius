@@ -146,6 +146,7 @@ Write fields (`POST`; `PATCH` accepts any subset, `null` clears an optional one)
 | PATCH  | /vehicles/:vehicleId/maintenance-reminders/:reminderId | Edit |
 | PATCH  | /vehicles/:vehicleId/maintenance-reminders/:reminderId/complete | Mark done, roll recurrence forward |
 | PATCH  | /vehicles/:vehicleId/maintenance-reminders/:reminderId/dismiss | Close without doing the work |
+| PATCH  | /vehicles/:vehicleId/maintenance-reminders/:reminderId/reopen | Track a closed reminder again |
 | DELETE | /vehicles/:vehicleId/maintenance-reminders/:reminderId | Delete → `204` |
 | GET    | /vehicles/:vehicleId/maintenance-summary           | Upkeep snapshot for the vehicle card |
 
@@ -189,7 +190,7 @@ reminder from becoming instantly overdue again. The base is the previous complet
 the current date, so six-monthly service done a week late still lands six months after the
 last visit. A reminder with **no** interval keeps its due values and becomes `COMPLETED` —
 that is what makes a one-time reminder one-time. Completing an already-closed reminder is
-`409`, and reopening happens by editing it.
+`409` — use `…/reopen` to track it again.
 
 Completing **never writes a service record**: history is only created when the user supplies
 the workshop and cost details, so no duplicate bill and no invented spend appears in the
@@ -197,6 +198,17 @@ expenditure totals.
 
 `PATCH …/dismiss` takes no body: the reminder becomes `DISMISSED` with its due values
 untouched, so the history of what was promised survives. `DELETE` removes it entirely.
+
+### Reopening a reminder
+
+`PATCH …/reopen` takes no body and is the only way back to `ACTIVE`. It changes the status
+column and nothing else: `due_date`, `due_odometer_km`, `interval_months`, `interval_km` and
+both `last_completed_*` values keep exactly the figures they had, so a closed promise is
+restored rather than replaced — and the recurrence clock is never restarted by a reopen.
+Because urgency is computed on read, a reminder whose due condition passed while it was
+closed returns `OVERDUE` immediately, and it counts towards `activeReminders` and
+`overdueReminders` in the summary again. Reopening a reminder that is already `ACTIVE` is
+`409`; editing is the operation for changing an active plan.
 
 ### Maintenance summary
 

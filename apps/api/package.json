@@ -10,7 +10,7 @@
     "lint": "eslint \"{src,test}/**/*.ts\"",
     "typecheck": "tsc --noEmit",
     "test": "jest",
-    "test:postgres": "jest --config jest.config.postgres.js",
+    "test:postgres": "jest --config jest.config.postgres.js --runInBand",
     "migration:run": "typeorm-ts-node-commonjs migration:run -d src/database/data-source.ts"
   },
   "dependencies": {

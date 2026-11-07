@@ -363,6 +363,13 @@ export class CreateServiceRecordInputDto {
 
   @ApiPropertyOptional({ maxLength: 2000, example: createServiceRecordExample.notes })
   notes?: string | null;
+
+  @ApiPropertyOptional({
+    type: Boolean,
+    description:
+      'Explicit user confirmation to move the vehicle’s current odometer to `odometerKm`, in this same transaction. Ignored when the stored reading is already at least that high; `400` when there is no reading, or when `serviceDate` is not today — a backdated invoice never drags the live odometer backwards or forwards. Absent means the vehicle reading is left exactly as it was. Not accepted on PATCH, where it would rewrite history.',
+  })
+  syncVehicleOdometer?: boolean;
 }
 
 /** A PATCH carries only the keys to change, so only those carry examples. */

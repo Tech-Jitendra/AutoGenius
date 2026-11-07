@@ -135,7 +135,7 @@ interface Fakes {
     save: jest.Mock;
     remove: jest.Mock;
   };
-  vehicles: { findOne: jest.Mock };
+  vehicles: { findOne: jest.Mock; save: jest.Mock };
   lock: jest.Mock;
   transaction: jest.Mock;
   builder: QueryBuilder;
@@ -169,6 +169,7 @@ function makeFakes(
     findOne: jest.fn().mockResolvedValue(
       overrides.vehicle === undefined ? makeVehicle() : overrides.vehicle,
     ),
+    save: jest.fn(async (entity: Record<string, unknown>) => entity),
   };
 
   const repos: Record<string, unknown> = {
@@ -322,6 +323,114 @@ describe('ServiceHistoryService', () => {
           'description',
         ].sort(),
       );
+    });
+    describe('syncing the vehicle odometer', () => {
+      const todayRecord = { ...minimalRecord, odometerKm: 47_000, serviceDate: '2026-11-04' };
+
+      it('moves the stored reading when the user confirms a higher one', async () => {
+        const fakes = makeFakes();
+        await fakes.service.createRecord(USER_ID, VEHICLE_ID, {
+          ...todayRecord,
+          syncVehicleOdometer: true,
+        });
+
+        expect(fakes.vehicles.save).toHaveBeenCalledWith(
+          expect.objectContaining({ id: VEHICLE_ID, currentOdometer: 47_000 }),
+        );
+      });
+
+      it('writes both rows in one transaction, under the user lock', async () => {
+        const fakes = makeFakes();
+        await fakes.service.createRecord(USER_ID, VEHICLE_ID, {
+          ...todayRecord,
+          syncVehicleOdometer: true,
+        });
+
+        expect(fakes.transaction).toHaveBeenCalledTimes(1);
+        expect(fakes.lock).toHaveBeenCalledTimes(1);
+        expect(fakes.records.save).toHaveBeenCalledTimes(1);
+        expect(fakes.vehicles.save).toHaveBeenCalledTimes(1);
+      });
+
+      it('leaves the vehicle reading untouched without confirmation', async () => {
+        const fakes = makeFakes();
+        await fakes.service.createRecord(USER_ID, VEHICLE_ID, todayRecord);
+
+        expect(fakes.records.save).toHaveBeenCalledTimes(1);
+        expect(fakes.vehicles.save).not.toHaveBeenCalled();
+      });
+
+      it('never moves the odometer backwards for a lower reading', async () => {
+        const fakes = makeFakes();
+        await fakes.service.createRecord(USER_ID, VEHICLE_ID, {
+          ...todayRecord,
+          odometerKm: 43_215,
+          syncVehicleOdometer: true,
+        });
+
+        expect(fakes.vehicles.save).not.toHaveBeenCalled();
+        expect(fakes.records.save).toHaveBeenCalledTimes(1);
+      });
+
+      it('treats an equal reading as nothing to do', async () => {
+        const fakes = makeFakes();
+        await fakes.service.createRecord(USER_ID, VEHICLE_ID, {
+          ...todayRecord,
+          odometerKm: 44_000,
+          syncVehicleOdometer: true,
+        });
+
+        expect(fakes.vehicles.save).not.toHaveBeenCalled();
+      });
+
+      it('adopts the reading when the vehicle has never stored one', async () => {
+        const fakes = makeFakes({ vehicle: makeVehicle({ currentOdometer: null }) });
+        await fakes.service.createRecord(USER_ID, VEHICLE_ID, {
+          ...todayRecord,
+          odometerKm: 1_000,
+          syncVehicleOdometer: true,
+        });
+
+        expect(fakes.vehicles.save).toHaveBeenCalledWith(
+          expect.objectContaining({ currentOdometer: 1_000 }),
+        );
+      });
+
+      it('refuses to sync from a backdated visit, and stores nothing', async () => {
+        const fakes = makeFakes();
+        await expect(
+          fakes.service.createRecord(USER_ID, VEHICLE_ID, {
+            ...minimalRecord,
+            odometerKm: 47_000,
+            syncVehicleOdometer: true,
+          }),
+        ).rejects.toThrow(/dated today/);
+        expect(fakes.records.save).not.toHaveBeenCalled();
+        expect(fakes.vehicles.save).not.toHaveBeenCalled();
+      });
+
+      it('refuses to sync from a record with no reading', async () => {
+        const fakes = makeFakes();
+        await expect(
+          fakes.service.createRecord(USER_ID, VEHICLE_ID, {
+            ...todayRecord,
+            odometerKm: undefined,
+            syncVehicleOdometer: true,
+          }),
+        ).rejects.toBeInstanceOf(BadRequestException);
+        expect(fakes.records.save).not.toHaveBeenCalled();
+      });
+
+      it('will not sync a vehicle the caller does not own', async () => {
+        const fakes = makeFakes({ vehicle: null });
+        await expect(
+          fakes.service.createRecord(OTHER_USER, VEHICLE_ID, {
+            ...todayRecord,
+            syncVehicleOdometer: true,
+          }),
+        ).rejects.toBeInstanceOf(NotFoundException);
+        expect(fakes.vehicles.save).not.toHaveBeenCalled();
+      });
     });
   });
 
@@ -750,6 +859,76 @@ describe('ServiceHistoryService', () => {
       const fakes = makeFakes({ vehicle: null });
       await expect(
         fakes.service.dismissReminder(USER_ID, VEHICLE_ID, REMINDER_ID),
+      ).rejects.toBeInstanceOf(NotFoundException);
+    });
+  });
+
+  describe('reopenReminder', () => {
+    it('activates a closed reminder without touching its plan or history', async () => {
+      const fakes = makeFakes({
+        reminder: makeReminderRow({
+          status: 'COMPLETED',
+          dueDate: '2026-12-20',
+          dueOdometerKm: 48_000,
+          intervalMonths: 6,
+          intervalKm: 5_000,
+          lastCompletedDate: '2026-09-20',
+          lastCompletedOdometerKm: 43_000,
+        }),
+      });
+      const reminder = await fakes.service.reopenReminder(USER_ID, VEHICLE_ID, REMINDER_ID);
+
+      expect(reminder.status).toBe('ACTIVE');
+      expect(reminder.dueDate).toBe('2026-12-20');
+      expect(reminder.dueOdometerKm).toBe(48_000);
+      expect(reminder.intervalMonths).toBe(6);
+      expect(reminder.intervalKm).toBe(5_000);
+      expect(reminder.lastCompletedDate).toBe('2026-09-20');
+      expect(reminder.lastCompletedOdometerKm).toBe(43_000);
+    });
+
+    it('judges the restored schedule again, so a passed due date reads overdue', async () => {
+      const fakes = makeFakes({
+        reminder: makeReminderRow({ status: 'DISMISSED', dueDate: '2026-10-20' }),
+      });
+      const reminder = await fakes.service.reopenReminder(USER_ID, VEHICLE_ID, REMINDER_ID);
+
+      expect(reminder.status).toBe('ACTIVE');
+      expect(reminder.alertStatus).toBe('OVERDUE');
+    });
+
+    it('locks the user row and writes through the scoped read', async () => {
+      const fakes = makeFakes({ reminder: makeReminderRow({ status: 'COMPLETED' }) });
+      await fakes.service.reopenReminder(USER_ID, VEHICLE_ID, REMINDER_ID);
+
+      expect(fakes.transaction).toHaveBeenCalledTimes(1);
+      expect(fakes.lock).toHaveBeenCalled();
+      expect(fakes.reminders.findOne).toHaveBeenCalledWith({
+        where: { id: REMINDER_ID, vehicleId: VEHICLE_ID, userId: USER_ID },
+      });
+      expect(fakes.reminders.save).toHaveBeenCalledTimes(1);
+    });
+
+    it('refuses to reopen a reminder that is already active', async () => {
+      const fakes = makeFakes({ reminder: makeReminderRow() });
+      await expect(
+        fakes.service.reopenReminder(USER_ID, VEHICLE_ID, REMINDER_ID),
+      ).rejects.toBeInstanceOf(ConflictException);
+      expect(fakes.reminders.save).not.toHaveBeenCalled();
+    });
+
+    it('will not reopen a reminder through someone else\'s vehicle', async () => {
+      const fakes = makeFakes({ vehicle: null });
+      await expect(
+        fakes.service.reopenReminder(OTHER_USER, VEHICLE_ID, REMINDER_ID),
+      ).rejects.toBeInstanceOf(NotFoundException);
+      expect(fakes.reminders.save).not.toHaveBeenCalled();
+    });
+
+    it('treats another user\'s reminder as not found', async () => {
+      const fakes = makeFakes();
+      await expect(
+        fakes.service.reopenReminder(OTHER_USER, VEHICLE_ID, REMINDER_ID),
       ).rejects.toBeInstanceOf(NotFoundException);
     });
   });

@@ -49,6 +49,7 @@ import {
   UpdateMaintenanceReminderInputDto,
 } from '../docs/dto/service-history.dto';
 import {
+  ReminderActiveConflict,
   ReminderClosedConflict,
   ReminderNotFound,
   UnauthorizedAccess,
@@ -237,6 +238,32 @@ export class MaintenanceRemindersController {
     @Param('reminderId', reminderParam) reminderId: string,
   ): Promise<MaintenanceReminder> {
     return this.history.dismissReminder(user.id, vehicleId, reminderId);
+  }
+
+  @Patch(':reminderId/reopen')
+  @ApiOperation({
+    summary: 'Track a closed reminder again',
+    description:
+      'Brings a COMPLETED or DISMISSED reminder back to ACTIVE exactly as it was: the due date, the due odometer, both intervals and the historical last-completed values are all left untouched, so nothing about the original promise is rewritten. Urgency is recomputed on read, which means a reminder whose due condition passed while it was closed comes back OVERDUE.',
+  })
+  @vehicleIdParam
+  @reminderIdParam
+  @ApiOkResponse({
+    description:
+      'The same reminder with status ACTIVE. Everything else is byte-for-byte what it was before.',
+    type: MaintenanceReminderDto,
+  })
+  @ValidationFailed('vehicleId or reminderId is not a UUID.')
+  @UnauthorizedAccess
+  @VehicleNotFound
+  @ReminderNotFound
+  @ReminderActiveConflict
+  reopen(
+    @CurrentUser() user: CurrentUserPayload,
+    @Param('vehicleId', idParam) vehicleId: string,
+    @Param('reminderId', reminderParam) reminderId: string,
+  ): Promise<MaintenanceReminder> {
+    return this.history.reopenReminder(user.id, vehicleId, reminderId);
   }
 
   @Delete(':reminderId')

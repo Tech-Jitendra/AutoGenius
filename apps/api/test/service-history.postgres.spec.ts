@@ -19,7 +19,15 @@ import { AppModule } from '../src/app.module';
 
 type Row = Record<string, unknown>;
 
-const runId = `${Date.now()}`;
+/**
+ * The identifier of this run. It is written into every fixture email
+ * (`pg-hist-<runId>-<label>@example.com`), so any row left behind can be
+ * traced back to the one run that made it, and so cleanup can be scoped to
+ * that run instead of to the table. A run that is killed outright by the
+ * operating system (taskkill /F, a power loss, the OOM killer) cannot clean up
+ * after itself; the README explains how to find what such a run left behind.
+ */
+const runId = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
 const emailPrefix = `pg-hist-${runId}`;
 const emailFor = (label: string): string => `${emailPrefix}-${label}@example.com`;
 
@@ -131,23 +139,56 @@ describe('Service history against real PostgreSQL', () => {
   }, 60_000);
 
   afterAll(async () => {
-    // History points at vehicles with ON DELETE RESTRICT, so it goes first: the
-    // users below would otherwise refuse to disappear.
-    const pattern = `${emailPrefix}-%`;
-    await dataSource.query(
-      `DELETE FROM service_records WHERE user_id IN (SELECT id FROM users WHERE email LIKE $1)`,
-      [pattern],
-    );
-    await dataSource.query(
-      `DELETE FROM maintenance_reminders WHERE user_id IN (SELECT id FROM users WHERE email LIKE $1)`,
-      [pattern],
-    );
-    await dataSource.query(
-      `DELETE FROM users WHERE id = ANY($1::uuid[]) OR email LIKE $2`,
-      [createdUserIds, pattern],
-    );
+    await removeRunFixtures(createdUserIds);
+    createdUserIds.length = 0;
+    // Anything that slipped past the id list is still identifiable by this
+    // run's email prefix, so the last sweep is scoped to the run, never to the
+    // table.
+    const stragglers = (
+      await dataSource.query(`SELECT id FROM users WHERE email LIKE $1`, [
+        `${emailPrefix}-%`,
+      ])
+    ).map((row: Row) => row.id as string);
+    await removeRunFixtures(stragglers);
     await app?.close();
   });
+
+  /**
+   * Sweep after every test, not only at the end of the suite. A failing test,
+   * an interrupted run, or a process that dies on Windows before `afterAll`
+   * (jest aborts with 0xC0000409 when it recycles its worker between postgres
+   * suites, which is where the leftover `pg-hist-*` rows came from) now costs
+   * at most the fixtures of the one test that was in flight.
+   */
+  afterEach(async () => {
+    await removeRunFixtures(createdUserIds);
+    createdUserIds.length = 0;
+  });
+
+  /**
+   * Deletes everything the given users own. History goes first because
+   * `service_records` and `maintenance_reminders` point at vehicles with
+   * ON DELETE RESTRICT.
+   *
+   * Every statement is keyed on ids this run created, so it cannot reach a row
+   * belonging to anyone else: no TRUNCATE, and no DELETE without that
+   * ownership condition.
+   */
+  async function removeRunFixtures(userIds: string[]): Promise<void> {
+    const ids = [...new Set(userIds)];
+    if (ids.length === 0) {
+      return;
+    }
+    await dataSource.query(
+      `DELETE FROM service_records WHERE user_id = ANY($1::uuid[])`,
+      [ids],
+    );
+    await dataSource.query(
+      `DELETE FROM maintenance_reminders WHERE user_id = ANY($1::uuid[])`,
+      [ids],
+    );
+    await dataSource.query(`DELETE FROM users WHERE id = ANY($1::uuid[])`, [ids]);
+  }
 
   async function signUp(label: string): Promise<{ id: string; token: string }> {
     const res = await request(app.getHttpServer())
@@ -219,6 +260,15 @@ describe('Service history against real PostgreSQL', () => {
        FROM maintenance_reminders WHERE vehicle_id = $1 ORDER BY created_at, id`,
       [vehicleId],
     );
+  }
+
+  /** Read straight from the column: the API response must not be the only proof. */
+  async function odometerOf(vehicleId: string): Promise<number | null> {
+    const rows = await dataSource.query(
+      `SELECT current_odometer FROM vehicles WHERE id = $1`,
+      [vehicleId],
+    );
+    return (rows[0] as Row | undefined)?.current_odometer as number | null;
   }
 
   it('applied the service-history migration with its constraints and indexes', async () => {
@@ -1019,6 +1069,115 @@ describe('Service history against real PostgreSQL', () => {
     expect(await reminderRows(vehicleId)).toHaveLength(0);
   });
 
+  it('reopens a closed reminder with its plan and history intact, judged afresh', async () => {
+    const { token } = await signUp('reopen');
+    const { token: attackerToken } = await signUp('reopen-attacker');
+    const vehicleId = await vehicleFor(token);
+    const otherVehicleId = await vehicleFor(attackerToken);
+
+    const oneOff = await createReminder(token, vehicleId, {
+      title: 'Wiper blades',
+      dueDate: isoDay(-3),
+    });
+    const recurring = await createReminder(token, vehicleId, {
+      title: 'Belt inspection',
+      dueDate: isoDay(-10),
+      dueOdometerKm: 45_000,
+      intervalMonths: 6,
+      intervalKm: 5_000,
+    });
+
+    // A reminder with no intervals closes for good when it is completed, so it
+    // is the row that ends up COMPLETED here.
+    const completed = await api(token).patch(
+      `${remindersPath(vehicleId)}/${oneOff.body.id}/complete`,
+      { completionDate: isoDay(-1), completionOdometerKm: 44_200 },
+    );
+    expect(completed.status).toBe(200);
+    expect(completed.body.status).toBe('COMPLETED');
+
+    const dismissed = await api(token).patch(
+      `${remindersPath(vehicleId)}/${recurring.body.id}/dismiss`,
+    );
+    expect(dismissed.status).toBe(200);
+
+    const reopened = await api(token).patch(
+      `${remindersPath(vehicleId)}/${oneOff.body.id}/reopen`,
+    );
+    expect(reopened.status).toBe(200);
+    expect(reopened.body.status).toBe('ACTIVE');
+    // Nothing about the original promise moved; only the life cycle did.
+    expect(reopened.body.dueDate).toBe(isoDay(-3));
+    expect(reopened.body.dueOdometerKm).toBeNull();
+    expect(reopened.body.intervalMonths).toBeNull();
+    expect(reopened.body.intervalKm).toBeNull();
+    expect(reopened.body.lastCompletedDate).toBe(isoDay(-1));
+    expect(reopened.body.lastCompletedOdometerKm).toBe(44_200);
+    // The due date passed while it was closed, so it comes back OVERDUE.
+    expect(reopened.body.alertStatus).toBe('OVERDUE');
+
+    const reopenedAgain = await api(token).patch(
+      `${remindersPath(vehicleId)}/${oneOff.body.id}/reopen`,
+    );
+    expect(reopenedAgain.status).toBe(409);
+    expect(reopenedAgain.body.message).toMatch(/already active/);
+
+    const reopenedDismissed = await api(token).patch(
+      `${remindersPath(vehicleId)}/${recurring.body.id}/reopen`,
+    );
+    expect(reopenedDismissed.status).toBe(200);
+    expect(reopenedDismissed.body.intervalMonths).toBe(6);
+    expect(reopenedDismissed.body.intervalKm).toBe(5_000);
+    expect(reopenedDismissed.body.dueOdometerKm).toBe(45_000);
+    expect(reopenedDismissed.body.lastCompletedDate).toBeNull();
+    expect(reopenedDismissed.body.alertStatus).toBe('OVERDUE');
+
+    // Reopening is a real write: the columns change, and only the status does.
+    // The dates are cast to text because node-pg hands back a JS Date for a
+    // `date` column, which shifts a day depending on the machine's zone.
+    const rows = await dataSource.query(
+      `SELECT title, status, due_date::text AS due_date, due_odometer_km,
+              interval_months, interval_km,
+              last_completed_date::text AS last_completed_date,
+              last_completed_odometer_km
+       FROM maintenance_reminders WHERE vehicle_id = $1 ORDER BY created_at, id`,
+      [vehicleId],
+    );
+    expect(rows).toHaveLength(2);
+    expect(rows.map((row: Row) => row.status)).toEqual(['ACTIVE', 'ACTIVE']);
+    expect(rows.find((row: Row) => row.title === 'Wiper blades')).toMatchObject({
+      due_date: isoDay(-3),
+      due_odometer_km: null,
+      last_completed_date: isoDay(-1),
+      last_completed_odometer_km: 44_200,
+    });
+    expect(rows.find((row: Row) => row.title === 'Belt inspection')).toMatchObject({
+      due_date: isoDay(-10),
+      due_odometer_km: 45_000,
+      interval_months: 6,
+      interval_km: 5_000,
+      last_completed_date: null,
+      last_completed_odometer_km: null,
+    });
+
+    // The summary is derived from the rows, so urgency is live the moment the
+    // reminder is tracked again.
+    const summary = await api(token).get(`/vehicles/${vehicleId}/maintenance-summary`);
+    expect(summary.status).toBe(200);
+    expect(summary.body.activeReminders).toBe(2);
+    expect(summary.body.overdueReminders).toBe(2);
+
+    // Another user's token, on their own vehicle, cannot reach this reminder.
+    const foreign = await api(attackerToken).patch(
+      `${remindersPath(otherVehicleId)}/${oneOff.body.id}/reopen`,
+    );
+    expect(foreign.status).toBe(404);
+    const foreignRow = (await reminderRows(vehicleId)).find(
+      (row: Row) => row.title === 'Wiper blades',
+    );
+    expect(foreignRow?.status).toBe('ACTIVE');
+  });
+
   it('summarises a vehicle from the rows themselves, with nothing left stale', async () => {
     const { token } = await signUp('summary');
     const vehicleId = await vehicleFor(token);
@@ -1201,6 +1360,128 @@ describe('Service history against real PostgreSQL', () => {
       (await dataSource.query(`SELECT count(*)::int AS n FROM vehicles WHERE user_id = $1`, [owner.id]))[0].n,
     ).toBe(0);
     createdUserIds.splice(createdUserIds.indexOf(owner.id), 1);
+  });
+
+  it('syncs the vehicle odometer only on an explicit, current confirmation', async () => {
+    const { token } = await signUp('odo-sync');
+    const { token: attackerToken } = await signUp('odo-attacker');
+    const vehicleId = await vehicleFor(token);
+    const attackerVehicleId = await vehicleFor(attackerToken);
+
+    const todaysVisit = { ...baseRecord, serviceDate: isoDay(0), odometerKm: 47_000 };
+
+    // Booked without confirmation: the reading is stored on the visit, the
+    // vehicle keeps the number the user last gave it.
+    await createRecord(token, vehicleId, todaysVisit);
+    expect(await odometerOf(vehicleId)).toBe(44_000);
+
+    // A confirmed reading that is equal, or lower, is a no-op — never a rewind.
+    expect(
+      (
+        await api(token).post(recordsPath(vehicleId), {
+          ...todaysVisit,
+          odometerKm: 44_000,
+          syncVehicleOdometer: true,
+        })
+      ).status,
+    ).toBe(201);
+    expect(await odometerOf(vehicleId)).toBe(44_000);
+
+    expect(
+      (
+        await api(token).post(recordsPath(vehicleId), {
+          ...todaysVisit,
+          serviceType: 'TYRE_REPLACEMENT',
+          odometerKm: 40_000,
+          syncVehicleOdometer: true,
+        })
+      ).status,
+    ).toBe(201);
+    expect(await odometerOf(vehicleId)).toBe(44_000);
+
+    // A backdated visit is refused outright: entering last month's invoice today
+    // must not decide what the vehicle reads now.
+    const backdated = await api(token).post(recordsPath(vehicleId), {
+      ...baseRecord,
+      odometerKm: 48_000,
+      syncVehicleOdometer: true,
+    });
+    expect(backdated.status).toBe(400);
+    expect(backdated.body.message).toMatch(/dated today/);
+
+    const noReading = await api(token).post(recordsPath(vehicleId), {
+      serviceDate: isoDay(0),
+      serviceType: 'OIL_CHANGE',
+      syncVehicleOdometer: true,
+    });
+    expect(noReading.status).toBe(400);
+    expect(noReading.body.message).toMatch(/without a reading/);
+
+    expect(await odometerOf(vehicleId)).toBe(44_000);
+    expect(await recordRows(vehicleId)).toHaveLength(3);
+
+    // The confirmed, current, higher reading finally moves it.
+    const synced = await api(token).post(recordsPath(vehicleId), {
+      ...todaysVisit,
+      odometerKm: 48_500,
+      syncVehicleOdometer: true,
+    });
+    expect(synced.status).toBe(201);
+    expect(await odometerOf(vehicleId)).toBe(48_500);
+
+    // Reminder urgency reads the vehicle's stored number, so it moved with it:
+    // a 48,000 km promise is overdue the moment the car says 48,500.
+    const reminder = await createReminder(token, vehicleId, {
+      title: 'Tyre rotation',
+      dueOdometerKm: 48_000,
+    });
+    expect(reminder.body.alertStatus).toBe('OVERDUE');
+
+    // Another user's confirmed request cannot reach this vehicle at all.
+    const foreign = await api(attackerToken).post(recordsPath(vehicleId), {
+      ...todaysVisit,
+      odometerKm: 99_000,
+      syncVehicleOdometer: true,
+    });
+    expect(foreign.status).toBe(404);
+    expect(await odometerOf(vehicleId)).toBe(48_500);
+    expect(await odometerOf(attackerVehicleId)).toBe(44_000);
+
+    // PATCH has no such field: editing an old visit cannot move the odometer.
+    const edited = await api(token).patch(
+      `${recordsPath(vehicleId)}/${synced.body.id}`,
+      { odometerKm: 50_000, syncVehicleOdometer: true },
+    );
+    expect(edited.status).toBe(200);
+    expect(edited.body.odometerKm).toBe(50_000);
+    expect(await odometerOf(vehicleId)).toBe(48_500);
+  });
+
+  it('never loses an odometer sync to a concurrent visit', async () => {
+    const { token } = await signUp('odo-race');
+    const vehicleId = await vehicleFor(token, { currentOdometer: 40_000 });
+
+    const results = await Promise.all([
+      api(token).post(recordsPath(vehicleId), {
+        serviceDate: isoDay(0),
+        serviceType: 'GENERAL_SERVICE',
+        odometerKm: 61_000,
+        syncVehicleOdometer: true,
+      }),
+      api(token).post(recordsPath(vehicleId), {
+        serviceDate: isoDay(0),
+        serviceType: 'TYRE_REPLACEMENT',
+        odometerKm: 60_000,
+        syncVehicleOdometer: true,
+      }),
+    ]);
+
+    expect(results.map((res) => res.status)).toEqual([201, 201]);
+
+    // The user-row lock serialises the two writes, so the second one re-reads
+    // the vehicle after the first committed: the result is the highest reading
+    // either visit carried, whichever order they happened to run in.
+    expect(await odometerOf(vehicleId)).toBe(61_000);
   });
 
   it('serialises two concurrent completions of the same reminder', async () => {

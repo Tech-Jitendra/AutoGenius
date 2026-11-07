@@ -113,6 +113,7 @@ describe('OpenAPI document contract', () => {
       'PATCH /api/v1/vehicles/{vehicleId}/maintenance-reminders/{reminderId}',
       'PATCH /api/v1/vehicles/{vehicleId}/maintenance-reminders/{reminderId}/complete',
       'PATCH /api/v1/vehicles/{vehicleId}/maintenance-reminders/{reminderId}/dismiss',
+      'PATCH /api/v1/vehicles/{vehicleId}/maintenance-reminders/{reminderId}/reopen',
       'PATCH /api/v1/vehicles/{vehicleId}/service-records/{recordId}',
       'POST /api/v1/auth/login',
       'POST /api/v1/auth/logout',

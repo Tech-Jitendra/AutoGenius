@@ -2,6 +2,7 @@ import { Pressable, StyleSheet, Text, View } from 'react-native';
 import { router, useLocalSearchParams } from 'expo-router';
 import type { CreateMaintenanceReminderInput } from '@autogenius/validation';
 import { ApiError } from '../../../lib/api/client';
+import { KeyboardAvoiding } from '../../../lib/keyboard-avoiding';
 import { vehicleName } from '../../../vehicles/labels';
 import { useVehicle } from '../../../vehicles/vehicle-queries';
 import {
@@ -37,14 +38,16 @@ export default function AddReminderScreen() {
         {vehicle ? `For ${vehicleName(vehicle)}` : 'Maintenance reminder'}
       </Text>
 
-      <MaintenanceReminderForm
-        submitLabel="Save reminder"
-        pending={createReminder.isPending}
-        serverError={
-          createReminder.error instanceof ApiError ? createReminder.error.message : null
-        }
-        onSubmit={onSubmit}
-      />
+      <KeyboardAvoiding>
+        <MaintenanceReminderForm
+          submitLabel="Save reminder"
+          pending={createReminder.isPending}
+          serverError={
+            createReminder.error instanceof ApiError ? createReminder.error.message : null
+          }
+          onSubmit={onSubmit}
+        />
+      </KeyboardAvoiding>
     </View>
   );
 }

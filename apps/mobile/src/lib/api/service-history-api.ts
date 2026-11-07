@@ -185,6 +185,20 @@ export function dismissMaintenanceReminder(
   );
 }
 
+/**
+ * Only flips the life cycle back to ACTIVE — the server keeps the due values,
+ * the intervals and the last-completed history exactly as they were.
+ */
+export function reopenMaintenanceReminder(
+  vehicleId: string,
+  reminderId: string,
+): Promise<MaintenanceReminderDto> {
+  return apiFetch<MaintenanceReminderDto>(
+    `${remindersPath(vehicleId)}/${encodeURIComponent(reminderId)}/reopen`,
+    { method: 'PATCH' },
+  );
+}
+
 export function deleteMaintenanceReminder(
   vehicleId: string,
   reminderId: string,

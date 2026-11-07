@@ -68,7 +68,7 @@ export class ServiceRecordsController {
   @ApiOperation({
     summary: 'Record a workshop visit',
     description:
-      'Adds one service record to the vehicle. Costs are stored as money (two decimals) and total_cost is derived from the three components, so a client cannot post a total that does not match its parts.',
+      'Adds one service record to the vehicle. Costs are stored as money (two decimals) and total_cost is derived from the three components, so a client cannot post a total that does not match its parts. `syncVehicleOdometer` is the user’s explicit confirmation to move the vehicle’s current odometer to this reading in the same transaction; it is ignored when the stored reading is already at least as high, and refused when the record has no reading or is dated before today.',
   })
   @vehicleIdParam
   @ApiBody({ type: CreateServiceRecordInputDto })

@@ -296,6 +296,23 @@ They create users under `pg-e2e-<run-id>@example.com`, `pg-veh-<run-id>@example.
 never a schema reset, and never anything belonging to a real account. They are excluded
 from `npm run test` so CI without a database still passes.
 
+**When a run is interrupted.** The `<run-id>` in the email is the ownership condition the
+cleanup is written against, so a leftover row always names the run that made it. Cleanup runs
+after **every test** as well as at the end of the suite, so a failing test, a `Ctrl-C`, or the
+worker abort that happens on Windows when jest recycles between these suites costs at most the
+fixtures of the one test that was in flight. Only the operating system killing the process
+outright (`taskkill /F`, power loss, the OOM killer) skips cleanup, because no code of ours is
+left running to execute it; those rows then sit in the database until someone sweeps them by
+run id:
+
+```sql
+-- What a given run left behind (read-only).
+SELECT id, email FROM users WHERE email LIKE 'pg-hist-<run-id>-%';
+```
+
+Nothing in the repository deletes those automatically, and no suite may delete rows that do not
+carry its own run id.
+
 ## Lint, typecheck, build
 
 ```bash

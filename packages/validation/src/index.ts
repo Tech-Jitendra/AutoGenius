@@ -270,7 +270,7 @@ export type TransmissionInput = z.infer<typeof createVehicleSchema>['transmissio
  * and a database CHECK keeps the three in agreement, so a client cannot invent a
  * total that does not match its components.
  */
-export const createServiceRecordSchema = z.object({
+const serviceRecordFields = z.object({
   serviceDate: pastCalendarDateSchema,
   odometerKm: optionalOdometerSchema,
   workshopName: optionalTextSchema(120),
@@ -289,7 +289,20 @@ export const createServiceRecordSchema = z.object({
   notes: optionalTextSchema(2000),
 });
 
-export const updateServiceRecordSchema = createServiceRecordSchema
+/**
+ * `syncVehicleOdometer` is deliberately absent from the update schema. It is a
+ * statement about the visit the user is booking *now*, so it belongs on the
+ * request that creates one; editing an old invoice must never carry an
+ * instruction to move the vehicle's live reading.
+ */
+export const createServiceRecordSchema = serviceRecordFields.extend({
+  syncVehicleOdometer: z.preprocess(
+    emptyToUndefined,
+    z.boolean().optional(),
+  ),
+});
+
+export const updateServiceRecordSchema = serviceRecordFields
   .partial()
   .refine(hasAnyField, AT_LEAST_ONE_FIELD);
 

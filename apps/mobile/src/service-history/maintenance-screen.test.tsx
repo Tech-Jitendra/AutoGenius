@@ -14,6 +14,8 @@ jest.mock('expo-router', () => ({
 const mockListReminders = jest.fn();
 const mockComplete = jest.fn();
 const mockDismiss = jest.fn();
+const mockReopen = jest.fn();
+const mockDelete = jest.fn();
 const mockGetVehicle = jest.fn();
 
 jest.mock('../lib/api/service-history-api', () => ({
@@ -22,6 +24,10 @@ jest.mock('../lib/api/service-history-api', () => ({
   completeMaintenanceReminder: (write: unknown) => mockComplete(write),
   dismissMaintenanceReminder: (vehicleId: string, reminderId: string) =>
     mockDismiss(vehicleId, reminderId),
+  reopenMaintenanceReminder: (vehicleId: string, reminderId: string) =>
+    mockReopen(vehicleId, reminderId),
+  deleteMaintenanceReminder: (vehicleId: string, reminderId: string) =>
+    mockDelete(vehicleId, reminderId),
 }));
 
 jest.mock('../lib/api/vehicles-api', () => ({
@@ -180,6 +186,8 @@ describe('maintenance screen', () => {
     mockListReminders.mockReset();
     mockComplete.mockReset();
     mockDismiss.mockReset();
+    mockReopen.mockReset();
+    mockDelete.mockReset();
     mockGetVehicle.mockReset();
     mockGetVehicle.mockResolvedValue(vehicle);
     mockListReminders.mockResolvedValue({
@@ -191,6 +199,12 @@ describe('maintenance screen', () => {
     });
     mockComplete.mockResolvedValue(rolledForward);
     mockDismiss.mockResolvedValue({ ...dismissed, status: 'DISMISSED' });
+    mockReopen.mockResolvedValue({
+      ...dismissed,
+      status: 'ACTIVE',
+      alertStatus: 'OVERDUE',
+    });
+    mockDelete.mockResolvedValue(undefined);
   });
 
   it('groups reminders by how urgent the server says they are', async () => {
@@ -217,6 +231,7 @@ describe('maintenance screen', () => {
     expect(buttons.filter((label) => label.startsWith('Mark Coolant flush'))).toEqual([]);
     expect(buttons.filter((label) => label.startsWith('Dismiss Coolant flush'))).toEqual([]);
     expect(buttons).toContain('Edit Coolant flush');
+    expect(buttons).toContain('Reopen Coolant flush');
   });
 
   it('opens the completion panel with today and the saved odometer ready', async () => {
@@ -281,6 +296,48 @@ describe('maintenance screen', () => {
 
     expect(mockDismiss).toHaveBeenCalledWith('v1', 'm2');
     expect(textOf(tree)).toContain('is dismissed. Its due values were left untouched.');
+  });
+
+  it('asks before reopening, and says what reopening will not change', async () => {
+    const tree = await renderScreen();
+    await press(tree, 'Reopen Coolant flush');
+
+    expect(textOf(tree)).toContain('Yes, reopen reminder');
+    expect(textOf(tree)).toContain('it does not roll the schedule forward');
+    expect(mockReopen).not.toHaveBeenCalled();
+
+    await press(tree, 'Confirm reopen');
+
+    expect(mockReopen).toHaveBeenCalledWith('v1', 'm3');
+    expect(textOf(tree)).toContain(
+      'Coolant flush is active again with the due values it was closed with.',
+    );
+  });
+
+  it('reports the server refusing a reopen that was never needed', async () => {
+    mockReopen.mockRejectedValue(
+      new ApiError(409, 'Reminder is already active. Edit it instead of reopening it.'),
+    );
+    const tree = await renderScreen();
+    await press(tree, 'Reopen Coolant flush');
+    await press(tree, 'Confirm reopen');
+
+    expect(textOf(tree)).toContain(
+      'Reminder is already active. Edit it instead of reopening it.',
+    );
+  });
+
+  it('opens a reminder on its own details screen', async () => {
+    const { router } = jest.requireMock('expo-router') as {
+      router: { push: jest.Mock };
+    };
+    const tree = await renderScreen();
+    await press(tree, 'Open Oil change details');
+
+    expect(router.push).toHaveBeenCalledWith({
+      pathname: '/vehicles/[id]/maintenance/[reminderId]',
+      params: { reminderId: 'm1', vehicleId: 'v1' },
+    });
   });
 
   it('walks the pages as the list reaches its end', async () => {

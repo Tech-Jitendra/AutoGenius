@@ -3,6 +3,7 @@ import { Pressable, StyleSheet, Text, View } from 'react-native';
 import { router, useLocalSearchParams } from 'expo-router';
 import type { CreateMaintenanceReminderInput } from '@autogenius/validation';
 import { ApiError } from '../../../../lib/api/client';
+import { KeyboardAvoiding } from '../../../../lib/keyboard-avoiding';
 import {
   MaintenanceReminderForm,
   reminderToFormValues,
@@ -85,16 +86,18 @@ export default function EditReminderScreen() {
       </View>
       <Text style={styles.subtitle}>{statusLine}</Text>
 
-      <MaintenanceReminderForm
-        key={reminder.id}
-        initial={reminderToFormValues(reminder)}
-        submitLabel="Save changes"
-        pending={updateReminder.isPending}
-        serverError={
-          updateReminder.error instanceof ApiError ? updateReminder.error.message : null
-        }
-        onSubmit={onSubmit}
-      />
+      <KeyboardAvoiding>
+        <MaintenanceReminderForm
+          key={reminder.id}
+          initial={reminderToFormValues(reminder)}
+          submitLabel="Save changes"
+          pending={updateReminder.isPending}
+          serverError={
+            updateReminder.error instanceof ApiError ? updateReminder.error.message : null
+          }
+          onSubmit={onSubmit}
+        />
+      </KeyboardAvoiding>
 
       <View style={styles.deleteSection}>
         {confirmingDelete ? (

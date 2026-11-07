@@ -109,8 +109,8 @@ function RecordRow({ vehicleId, record }: { vehicleId: string; record: ServiceRe
       style={({ pressed }) => [styles.row, pressed && styles.pressed]}
       onPress={() =>
         router.push({
-          pathname: '/service-history/[recordId]/edit',
-          params: { recordId: record.id, vehicleId },
+          pathname: '/vehicles/[id]/service-history/[recordId]',
+          params: { recordId: record.id, id: vehicleId },
         })
       }
       accessibilityRole="button"

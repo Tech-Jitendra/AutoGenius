@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, type ReactNode } from 'react';
 import {
   ActivityIndicator,
   Pressable,
@@ -85,6 +85,22 @@ export function filledParts(values: ServiceRecordFormValues): PartRow[] {
   return values.parts.filter((part) => part.name.trim() !== '');
 }
 
+/**
+ * Whether a validated record is worth offering as the vehicle's live odometer.
+ * The mirror of the server's rule, so the prompt only appears when confirming
+ * would change something: a reading, on a visit dated today, above what the
+ * vehicle shows now. A vehicle with no reading yet takes this one.
+ */
+export function odometerSyncOffer(
+  input: CreateServiceRecordInput,
+  currentOdometer: number | null | undefined,
+): boolean {
+  if (input.odometerKm === null || input.odometerKm === undefined) return false;
+  if (input.serviceDate !== todayIsoDate()) return false;
+  if (typeof currentOdometer !== 'number') return true;
+  return input.odometerKm > currentOdometer;
+}
+
 function toPayload(values: ServiceRecordFormValues): Record<string, unknown> {
   return {
     serviceDate: values.serviceDate,
@@ -141,6 +157,11 @@ interface ServiceRecordFormProps {
   submitLabel: string;
   pending: boolean;
   serverError?: string | null;
+  /**
+   * Rendered in the scroll flow just above the submit button, for a screen that
+   * needs to ask something about the values the user has just entered.
+   */
+  banner?: ReactNode;
   onSubmit: (input: CreateServiceRecordInput) => void;
 }
 
@@ -149,6 +170,7 @@ export function ServiceRecordForm({
   submitLabel,
   pending,
   serverError = null,
+  banner = null,
   onSubmit,
 }: ServiceRecordFormProps) {
   const [values, setValues] = useState<ServiceRecordFormValues>(initial);
@@ -342,6 +364,8 @@ export function ServiceRecordForm({
           accessibilityLabel="Notes"
         />
       </Field>
+
+      {banner}
 
       {serverError ? <Text style={styles.formError}>{serverError}</Text> : null}
 

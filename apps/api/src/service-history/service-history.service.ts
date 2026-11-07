@@ -65,6 +65,10 @@ export class ServiceHistoryService {
         userId,
         vehicleId,
       );
+      // Asked before anything is written, so a refused sync leaves no record
+      // behind and the user gets one clear error instead of a rollback.
+      const syncTo = odometerSyncTarget(vehicle, input);
+
       const repo = manager.getRepository(ServiceRecordEntity);
       const saved = await repo.save(
         repo.create({
@@ -81,6 +85,12 @@ export class ServiceHistoryService {
           notes: input.notes ?? null,
         }),
       );
+
+      if (syncTo !== null) {
+        vehicle.currentOdometer = syncTo;
+        await manager.getRepository(VehicleEntity).save(vehicle);
+      }
+
       return toServiceRecord(saved);
     });
   }
@@ -640,6 +650,46 @@ async function lowestAllowedOdometer(
     Number(latest?.reading ?? 0),
     lastCompletedOdometerKm ?? 0,
   );
+}
+
+/**
+ * The vehicle's live odometer belongs to the user, so it is the user who decides
+ * when a service visit moves it. `syncVehicleOdometer` is that decision, made
+ * explicitly on the request that books the visit — the server never infers it,
+ * and never reads the vehicle's current state off `MAX(service_records.odometer_km)`
+ * behind the user's back.
+ *
+ * Returns the reading to store, or null when there is nothing to do. Two rules
+ * turn a request into an error rather than a silent no-op: syncing needs a
+ * reading to sync from, and a backdated visit must not drag the live odometer
+ * forward — that would make the odometer a function of whenever the user got
+ * round to entering the invoice.
+ *
+ * A reading that is not higher than the stored one is accepted and ignored: the
+ * state the user asked for already holds, which is what makes a double-tapped
+ * submit harmless.
+ */
+function odometerSyncTarget(
+  vehicle: VehicleEntity,
+  input: CreateServiceRecordInput,
+): number | null {
+  if (input.syncVehicleOdometer !== true) {
+    return null;
+  }
+  if (input.odometerKm === null || input.odometerKm === undefined) {
+    throw new BadRequestException(
+      'The vehicle odometer cannot be synced from a service record without a reading.',
+    );
+  }
+  if (input.serviceDate !== isoDayFromInstant(new Date())) {
+    throw new BadRequestException(
+      'Only a service dated today can update the vehicle odometer. Edit the vehicle for a backdated visit.',
+    );
+  }
+  if (vehicle.currentOdometer !== null && vehicle.currentOdometer >= input.odometerKm) {
+    return null;
+  }
+  return input.odometerKm;
 }
 
 function alreadyClosedMessage(status: string): string {

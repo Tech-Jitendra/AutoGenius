@@ -225,7 +225,7 @@ describe('service history screen', () => {
     expect(mockListRecords.mock.calls.length).toBeGreaterThan(1);
   });
 
-  it('opens a visit to view or change it', async () => {
+  it('opens a visit on its read-only details, not on the edit form', async () => {
     const { router } = jest.requireMock('expo-router') as {
       router: { push: jest.Mock };
     };
@@ -236,8 +236,8 @@ describe('service history screen', () => {
     await press(tree, '2026-05-12 · Oil Change · City Auto Care · 42,000 km, ₹2,200');
 
     expect(router.push).toHaveBeenCalledWith({
-      pathname: '/service-history/[recordId]/edit',
-      params: { recordId: 'r1', vehicleId: 'v1' },
+      pathname: '/vehicles/[id]/service-history/[recordId]',
+      params: { recordId: 'r1', id: 'v1' },
     });
   });
 });

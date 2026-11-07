@@ -23,9 +23,11 @@ import {
   getServiceRecord,
   listMaintenanceReminders,
   listServiceRecords,
+  reopenMaintenanceReminder,
   updateMaintenanceReminder,
   updateServiceRecord,
 } from '../lib/api/service-history-api';
+import { vehicleKeys } from '../vehicles/vehicle-queries';
 
 export const serviceHistoryKeys = {
   all: (vehicleId: string) => ['service-history', vehicleId] as const,
@@ -109,7 +111,15 @@ export function useServiceHistoryWriter(vehicleId: string | undefined) {
     createRecord: useMutation({
       mutationFn: (input: CreateServiceRecordInput) =>
         createServiceRecord(vehicleId ?? '', input),
-      onSuccess: invalidate,
+      onSuccess: (_record, input) => {
+        invalidate();
+        // A confirmed sync changed the vehicle's own reading, and that number
+        // is what the vehicle card shows and what reminder urgency is judged
+        // against, so the vehicles branch has to come back from the server too.
+        if (input.syncVehicleOdometer === true) {
+          queryClient.invalidateQueries({ queryKey: vehicleKeys.all });
+        }
+      },
     }),
 
     updateRecord: useMutation({
@@ -165,6 +175,12 @@ export function useServiceHistoryWriter(vehicleId: string | undefined) {
     removeReminder: useMutation({
       mutationFn: (reminderId: string) =>
         deleteMaintenanceReminder(vehicleId ?? '', reminderId),
+      onSuccess: invalidate,
+    }),
+
+    reopenReminder: useMutation({
+      mutationFn: (reminderId: string) =>
+        reopenMaintenanceReminder(vehicleId ?? '', reminderId),
       onSuccess: invalidate,
     }),
   };

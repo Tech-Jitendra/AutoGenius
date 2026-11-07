@@ -3,6 +3,7 @@ import { Pressable, StyleSheet, Text, View } from 'react-native';
 import { router, useLocalSearchParams } from 'expo-router';
 import type { CreateServiceRecordInput } from '@autogenius/validation';
 import { ApiError } from '../../../../lib/api/client';
+import { KeyboardAvoiding } from '../../../../lib/keyboard-avoiding';
 import {
   recordToFormValues,
   ServiceRecordForm,
@@ -72,16 +73,18 @@ export default function EditServiceRecordScreen() {
         <Text style={styles.title}>Edit visit</Text>
       </View>
 
-      <ServiceRecordForm
-        key={record.id}
-        initial={recordToFormValues(record)}
-        submitLabel="Save changes"
-        pending={updateRecord.isPending}
-        serverError={
-          updateRecord.error instanceof ApiError ? updateRecord.error.message : null
-        }
-        onSubmit={onSubmit}
-      />
+      <KeyboardAvoiding>
+        <ServiceRecordForm
+          key={record.id}
+          initial={recordToFormValues(record)}
+          submitLabel="Save changes"
+          pending={updateRecord.isPending}
+          serverError={
+            updateRecord.error instanceof ApiError ? updateRecord.error.message : null
+          }
+          onSubmit={onSubmit}
+        />
+      </KeyboardAvoiding>
 
       <View style={styles.deleteSection}>
         {confirmingDelete ? (
